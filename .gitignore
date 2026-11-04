@@ -1,0 +1,5 @@
+# Lokale Laufzeit- und Benutzerkonfigurationen
+ForestControl/
+Rayfield/
+*.rfld
+ConfigLoader.json
