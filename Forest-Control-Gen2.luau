@@ -115,8 +115,14 @@ local function isAlive()
         and not (state.window and state.window.unloaded)
 end
 
+local function isGuardianFightActive()
+    local active = workspace:GetAttribute("GuardianActive")
+    return type(active) == "string" and active ~= ""
+end
+
 local function isRunning()
     return isAlive() and state.enabled and not state.bossBusy and not state.sellBusy and not state.configLoading
+        and not isGuardianFightActive()
 end
 
 local function isBossRunning()
@@ -4934,6 +4940,10 @@ state.worker = task.spawn(function()
     local nextDisplay = 0
     while isAlive() do
         if not isRunning() then
+            if state.enabled and isGuardianFightActive() and not state.bossBusy
+                and not state.sellBusy and not state.configLoading then
+                setStatus("Bosskampf · Baumfarm pausiert · manuelle Waffenwahl")
+            end
             if os.clock() >= nextDisplay then
                 nextDisplay = os.clock() + 1
                 local displayed, displayError = pcall(refreshCombatDisplay)
