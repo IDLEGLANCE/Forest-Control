@@ -2210,15 +2210,30 @@ end
         finishJob(job)
         return true
     end
+    local function hoardRunestone(wild, current)
+        local area = current and current.Areas and current.Areas[6]
+        if not area or (tonumber(workspace:GetAttribute("AreasUnlocked")) or 0) < 6 then return nil end
+        local runestones = wild and wild:FindFirstChild("Runestones")
+        local stone = runestones and runestones:FindFirstChild("Runestone6")
+        if not stone or not stone:IsA("Model") or stone:GetAttribute("Area") ~= area.Key
+            or type(stone:GetAttribute("Lit")) ~= "boolean" then return nil end
+        return stone
+    end
+    function controller.hoardRunestone()
+        if not running() or not config.AutoHoard then return nil end
+        local data = rules()
+        if not data or data.lobby or not data.chapter or data.chapter.Key ~= "WarGod" then return nil end
+        local wild = workspace:FindFirstChild("FrostWilds")
+        local hoard = wild and wild:FindFirstChild("Hoard")
+        if not hoard or hoard:GetAttribute("Open") == true then return nil end
+        return hoardRunestone(wild, data.chapter)
+    end
     local function solveHoard(wild, current)
         local hoard = wild:FindFirstChild("Hoard")
         if not hoard or hoard:GetAttribute("Open") == true then return false end
-        local area = current and current.Areas and current.Areas[6]
-        local total = area and workspace:GetAttribute("BiomeTotal_" .. area.Key)
-        local left = area and workspace:GetAttribute("AreaLeft_" .. area.Key)
-        if not area or (tonumber(workspace:GetAttribute("AreasUnlocked")) or 0) < 6
-            or type(total) ~= "number" or total <= 0 or type(left) ~= "number" or left > total * 0.1 then
-            report("Kiste wartet · Area 6 muss mindestens 90 % geräumt sein")
+        local stone = hoardRunestone(wild, current)
+        if not stone or stone:GetAttribute("Lit") ~= true then
+            report("Kiste wartet · Runestone 6 muss aktiviert sein")
             return false
         end
         if (controller.retry[hoard] or 0) > os.clock() then return false end
@@ -2483,7 +2498,7 @@ end
         event:CreateSection({ name = "Frozen Wilds · Shards" })
         for _, feature in ipairs({
             { key = "AutoRavens", name = "Raben automatisch einsammeln", hint = "Besucht noch fehlende Raben in freigeschalteten Areas und wartet auf die bestätigte RavensFound-Liste. Unabhängig vom Autofarm." },
-            { key = "AutoHoard", name = "Säulenrätsel automatisch lösen", hint = "Ab 90 % geräumter Area 6: Zielsymbole lesen, die drei Säulen drehen und auf die bestätigte Kistenöffnung warten." },
+            { key = "AutoHoard", name = "Säulenrätsel automatisch lösen", hint = "Autofarm priorisiert die sechs markierten Bäume um Runestone 6, sobald Area 6 freigeschaltet ist. Nach dessen Aktivierung: Zielsymbole lesen, Säulen drehen und Kistenöffnung bestätigen." },
         }) do
             local key = feature.key
             state.controls[key] = event:CreateToggle({ name = feature.name, description = feature.hint,
@@ -4310,14 +4325,15 @@ local function resolveWorld()
     return trees and Swing and Swing:IsA("RemoteEvent") and Chop and Chop:IsA("RemoteEvent")
 end
 
-local function nearestTree(root)
+local function nearestTree(root, runestone)
     sweepFire()
     local nearest
     local bestSquared = math.huge
     local now = os.clock()
     local nextRetry = math.huge
     for _, tree in ipairs(trees:GetChildren()) do
-        if isAvailable(tree) and not treeCoordinator.isOccupied(tree) then
+        if (not runestone or tree:GetAttribute("RuneRing") == runestone.Name)
+            and isAvailable(tree) and not treeCoordinator.isOccupied(tree) then
             local position = treePosition(tree)
             if position then
                 local offset = root.Position - position
@@ -5709,7 +5725,7 @@ local function createAbilityController()
         end
         return math.max(0, left)
     end
-    function controller.step(character, root, humanoid)
+    function controller.step(character, root, humanoid, runestone)
         if not controller.alive or not isRunning() then return false end
         local data = resolve()
         if not data or not ownsFarmTool("Leviathan") then return false end
@@ -5737,7 +5753,8 @@ local function createAbilityController()
             local candidates = {}
             local range = math.max(tonumber(data.spec.Range) or 100, tonumber(data.spec.ChainRange) or 170)
             for _, tree in ipairs(trees:GetChildren()) do
-                if isAvailable(tree) and not treeCoordinator.isOccupied(tree) and (skippedUntil[tree] or 0) <= os.clock() then
+                if (not runestone or tree:GetAttribute("RuneRing") == runestone.Name)
+                    and isAvailable(tree) and not treeCoordinator.isOccupied(tree) and (skippedUntil[tree] or 0) <= os.clock() then
                     local position = treePosition(tree)
                     if position and flat(position - root.Position).Magnitude <= range then
                         table.insert(candidates, { tree = tree, position = position, hp = treeHP(tree) })
@@ -5818,12 +5835,20 @@ local function farmStep()
         task.wait(0.1)
         return
     end
-    if abilityController.step(character, root, humanoid) then return end
-    local tree, nextRetry = nearestTree(root)
+    local runestone = state.runController and state.runController.hoardRunestone()
+    if runestone and runestone:GetAttribute("Lit") == true then
+        setStatus("Runestone 6 aktiviert · warte auf Säulenrätsel …")
+        task.wait(0.1)
+        return
+    end
+    if abilityController.step(character, root, humanoid, runestone) then return end
+    local tree, nextRetry = nearestTree(root, runestone)
     if updateSawToolChoice(tree) then return end
     if not tree then
         if nextRetry < math.huge then
             setStatus("Warte auf nächsten Anlauf · " .. string.format("%.1f", math.max(0, nextRetry - os.clock())) .. " s")
+        elseif runestone then
+            setStatus("Runestone 6 · warte auf freie Ringbäume / Serverbestätigung")
         else
             setStatus("Kein freier Baum verfügbar · warte auf Mitspieler / neue Bäume")
         end
