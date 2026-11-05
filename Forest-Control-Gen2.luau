@@ -60,6 +60,7 @@ local state = {
     combat = nil :: { [string]: any }?,
     bossController = nil :: { [string]: any }?,
     abilityController = nil :: { [string]: any }?,
+    treeCoordinator = nil :: { [string]: any }?,
     bossBusy = false,
     bossWorker = nil,
     configLoading = false,
@@ -208,6 +209,7 @@ function state.setEnabled(enabled)
     state.running = state.enabled
     state.revision = state.revision + 1
     cancelMovement()
+    if not state.enabled and state.treeCoordinator then state.treeCoordinator.clear() end
     if not state.enabled and state.abilityController then state.abilityController.cancel() end
     if not state.enabled and state.combat then
         if state.combat.stopSaw then state.combat.stopSaw() end
@@ -238,6 +240,7 @@ function state.stop()
     state.revision = state.revision + 1
     cancelMovement()
 
+    if state.treeCoordinator then state.treeCoordinator.destroy() end
     if state.abilityController then state.abilityController.destroy() end
     if state.bossController then state.bossController.destroy() end
     if state.combat and state.combat.destroy then state.combat.destroy() end
@@ -2758,6 +2761,215 @@ local function treePosition(tree)
     return nil
 end
 
+-- Gemeinsame Bäume meiden: replizierte Treffer/Aktionen und sichtbare Anläufe anderer Spieler.
+local function createTreeCoordinator()
+    local flights: { [Instance]: any } = {}
+    setmetatable(flights, { __mode = "k" })
+    local coordinator = {
+        alive = true,
+        peers = {} :: { [number]: any }, previous = {} :: { [number]: any },
+        flights = flights,
+        current = nil :: Instance?, currentTop = nil :: Instance?, claimedAt = 0, claimClock = 0, nextRefresh = 0,
+        connection = nil :: RBXScriptConnection?,
+    }
+    state.treeCoordinator = coordinator
+    local function flat(vector) return Vector3.new(vector.X, 0, vector.Z) end
+    local function actor(who)
+        local character = who.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not root or not humanoid or humanoid.Health <= 0 or humanoid.Sit
+            or who:GetAttribute("Down") == true then return nil end
+        return root
+    end
+    local function actionWindow(who)
+        local tool = who:GetAttribute("Tool")
+        local spec = combat.settings and combat.settings.Tools and combat.settings.Tools[tool]
+        local windup = spec and spec.Heavy and tonumber(spec.Heavy.Windup) or 1
+        return math.clamp((spec and tonumber(spec.Swing) or 1) * windup + 1, 1.25, 5)
+    end
+    local function acting(who, since)
+        if who:GetAttribute("GunOut") or who:GetAttribute("AxeOut") then return false end
+        if who:GetAttribute("Revving") == true then
+            if not since then return true end
+            local visuals = combat.axe and combat.axe.visuals or combat.native and combat.native.visuals
+            local hit = visuals and type(visuals.SawingBy) == "function" and visuals.SawingBy(who.UserId)
+            if hit and hit.Tree == coordinator.current and (tonumber(hit.HitAt) or 0) >= coordinator.claimClock then return true end
+        end
+        local at = who:GetAttribute("ActAt")
+        local kind = who:GetAttribute("ActKind")
+        local age = type(at) == "number" and workspace:GetServerTimeNow() - at or math.huge
+        return type(kind) == "string" and (kind == "Chop" or kind == "Punch" or kind == "Slash"
+            or kind == "Heavy" or kind == "Saw" or kind == "Flame") and age >= -0.2 and age <= actionWindow(who)
+            and (not since or at >= since)
+    end
+    function coordinator.setTarget(tree)
+        local top = tree and tree:FindFirstChild("Top", true)
+        if coordinator.current ~= tree or coordinator.currentTop ~= top then
+            coordinator.current, coordinator.currentTop = tree, top
+            coordinator.claimedAt = workspace:GetServerTimeNow()
+            coordinator.claimClock = os.clock()
+        end
+    end
+    function coordinator.clear()
+        coordinator.setTarget(nil)
+        coordinator.nextRefresh = 0
+    end
+    function coordinator.destroy()
+        coordinator.alive = false
+        if coordinator.connection then coordinator.connection:Disconnect(); coordinator.connection = nil end
+        table.clear(coordinator.peers)
+        table.clear(coordinator.previous)
+        for tree in pairs(coordinator.flights) do coordinator.flights[tree] = nil end
+        coordinator.current = nil
+    end
+    local function refresh()
+        local now = os.clock()
+        if now < coordinator.nextRefresh then return end
+        coordinator.nextRefresh = now + 0.1
+        local peers, previous = {}, {}
+        local visuals = combat.axe and combat.axe.visuals or combat.native and combat.native.visuals
+        for _, who in ipairs(Players:GetPlayers()) do
+            if who == player then continue end
+            local root = actor(who)
+            if not root then continue end
+            local position = root.Position
+            local prior = coordinator.previous[who.UserId]
+            local motion = prior and prior.root == root and now > prior.at and flat(position - prior.position) / (now - prior.at)
+                or flat(root.AssemblyLinearVelocity)
+            previous[who.UserId] = { position = position, at = now, root = root }
+            local facing = flat(root.CFrame.LookVector)
+            facing = facing.Magnitude > 0.001 and facing.Unit or Vector3.new(0, 0, -1)
+            local tool = who:GetAttribute("Tool")
+            local spec = combat.settings and combat.settings.Tools and combat.settings.Tools[tool]
+            local range = spec and (spec.ServerReach or spec.Reach)
+            if tool == "Flamethrower" and combat.settings and combat.settings.Flamethrower then
+                range = combat.settings.Flamethrower.ServerRange or combat.settings.Flamethrower.Range or range
+            end
+            local reach = math.clamp(tonumber(range) or 8, 3, 18) + 1
+            local peer = { player = who, root = root, position = position, active = acting(who), target = nil,
+                approaching = false }
+            if trees and not who:GetAttribute("GunOut") and not who:GetAttribute("AxeOut") then
+                if visuals and type(visuals.SawingBy) == "function" then
+                    local hit = visuals.SawingBy(who.UserId)
+                    local tree = hit and hit.Tree
+                    local at = tree and isAvailable(tree) and treePosition(tree)
+                    if at and math.abs(at.Y - position.Y) <= 7 and flat(at - position).Magnitude <= reach + 3 then
+                        peer.target, peer.active = tree, true
+                    end
+                end
+                if not peer.target and (peer.active or motion.Magnitude > 1) then
+                    local best = math.huge
+                    for _, tree in ipairs(trees:GetChildren()) do
+                        if not isAvailable(tree) then continue end
+                        local at = treePosition(tree)
+                        if not at or math.abs(at.Y - position.Y) > 7 then continue end
+                        local offset = flat(at - position)
+                        local distance = offset.Magnitude
+                        if distance <= 0.1 or distance > reach then continue end
+                        local alignment = facing:Dot(offset.Unit)
+                        if alignment < 0.7 then continue end
+                        local score = distance * (1 + (1 - alignment) * 2)
+                        if score < best then
+                            best = score
+                            peer.target = tree
+                            peer.approaching = motion:Dot(offset.Unit) > 1
+                        end
+                    end
+                end
+            end
+            table.insert(peers, peer)
+        end
+        coordinator.peers, coordinator.previous = peers, previous
+    end
+    function coordinator.isOccupied(tree)
+        if not coordinator.alive then return false end
+        refresh()
+        local flight = coordinator.flights[tree]
+        if flight then
+            if os.clock() < flight.expires and flight.player.Parent == Players and actor(flight.player) then return true end
+            coordinator.flights[tree] = nil
+        end
+        local root, at
+        for _, peer in ipairs(coordinator.peers) do
+            if peer.target ~= tree then continue end
+            if peer.active then
+                local mine = coordinator.current == tree and acting(player, coordinator.claimedAt)
+                -- Bei gleichzeitig gestarteten Schlägen gewinnt dieselbe UserId auf beiden Clients.
+                if not mine or peer.player.UserId < player.UserId then return true end
+            elseif peer.approaching then
+                root = root or actor(player)
+                at = at or treePosition(tree)
+                if not root or not at then continue end
+                local theirDistance = flat(peer.position - at).Magnitude
+                local myDistance = flat(root.Position - at).Magnitude
+                if theirDistance + 1 < myDistance
+                    or math.abs(theirDistance - myDistance) <= 1 and peer.player.UserId < player.UserId then return true end
+            end
+        end
+        return false
+    end
+    function coordinator.throwSafe(plan, spec, origin)
+        refresh()
+        local foreign = {}
+        for _, peer in ipairs(coordinator.peers) do
+            if peer.target and (peer.active or peer.approaching) and coordinator.isOccupied(peer.target) then
+                foreign[peer.target] = true
+            end
+        end
+        for tree, flight in pairs(coordinator.flights) do
+            if os.clock() < flight.expires and flight.player.Parent == Players then foreign[tree] = true end
+        end
+        local range = tonumber(spec.Range) or 100
+        local chainRange = tonumber(spec.ChainRange) or 170
+        local hop = (tonumber(spec.HopRange) or 34) + 2
+        local cone = math.cos(math.rad(math.max(tonumber(spec.Cone) or 32, tonumber(spec.RightCone) or 10)))
+        for tree in pairs(foreign) do
+            if not isAvailable(tree) then continue end
+            local at = treePosition(tree)
+            local offset = at and flat(at - origin)
+            if not offset or offset.Magnitude > chainRange then continue end
+            if offset.Magnitude <= range and (offset.Magnitude < 0.1 or offset.Unit:Dot(plan.direction) >= cone) then
+                return false
+            end
+            for _, selected in ipairs(plan.trees) do
+                local position = treePosition(selected)
+                if position and flat(position - at).Magnitude <= hop then return false end
+            end
+        end
+        return true
+    end
+    function coordinator.positionClear(position)
+        if not coordinator.alive then return true end
+        refresh()
+        for _, peer in ipairs(coordinator.peers) do
+            if math.abs(position.Y - peer.position.Y) < 5
+                and flat(position - peer.position).Magnitude < 3.25 then return false end
+        end
+        return true
+    end
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local services = shared and shared:FindFirstChild("Services")
+    local remotes = services and services:FindFirstChild("ChopRemotes")
+    local flight = remotes and remotes:FindFirstChild("AxeFlight")
+    if flight then
+        coordinator.connection = flight.OnClientEvent:Connect(function(who, _points, times, targets)
+            if not isAlive() or who == player or typeof(who) ~= "Instance" or not who:IsA("Player")
+                or type(times) ~= "table" or type(targets) ~= "table" then return end
+            local backAt = times[#times]
+            if not positive(backAt) then return end
+            local expires = os.clock() + math.clamp(backAt - workspace:GetServerTimeNow() + 0.8, 0.1, 8)
+            for _, tree in pairs(targets) do
+                if typeof(tree) == "Instance" and isAvailable(tree) then
+                    coordinator.flights[tree] = { player = who, expires = expires }
+                end
+            end
+        end)
+    end
+    return coordinator
+end
+local treeCoordinator = createTreeCoordinator()
+
 local function nativeTreeState(tree)
     local adapter = player:GetAttribute("Tool") ~= "HellChain" and combat.axe or combat.native
     local visuals = adapter and adapter.visuals
@@ -2804,7 +3016,7 @@ local function nearestTree(root)
     local now = os.clock()
     local nextRetry = math.huge
     for _, tree in ipairs(trees:GetChildren()) do
-        if isAvailable(tree) then
+        if isAvailable(tree) and not treeCoordinator.isOccupied(tree) then
             local position = treePosition(tree)
             if position then
                 local offset = root.Position - position
@@ -2819,6 +3031,7 @@ local function nearestTree(root)
             end
         end
     end
+    treeCoordinator.setTarget(nearest)
     return nearest, nextRetry
 end
 
@@ -2829,6 +3042,7 @@ local function validTarget(tree, character, root, humanoid, revision)
         and root:IsDescendantOf(character)
         and humanoid.Health > 0
         and isAvailable(tree)
+        and not treeCoordinator.isOccupied(tree)
 end
 
 local function approachTree(tree, character, root, humanoid, revision, profile)
@@ -2848,6 +3062,20 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
     local clearance = config.Distance + (recovery and math.min(1, recovery.failures * 0.35) or 0)
     if profile and profile.minimumDistance then clearance = math.max(clearance, profile.minimumDistance) end
     local destination = position + direction * math.min(clearance, maxDistance)
+    if not treeCoordinator.positionClear(destination) then
+        local radius = math.min(clearance, maxDistance)
+        local best, bestDistance
+        for i = 0, 7 do
+            local angle = i * math.pi / 4
+            local candidate = position + Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
+            local distance = (candidate - root.Position).Magnitude
+            if treeCoordinator.positionClear(candidate) and (not bestDistance or distance < bestDistance) then
+                best, bestDistance = candidate, distance
+            end
+        end
+        if not best then return nil end
+        destination = best
+    end
     local lookAt = Vector3.new(position.X, destination.Y, position.Z)
     local duration = math.clamp(
         (root.Position - destination).Magnitude / config.Speed,
@@ -2864,7 +3092,8 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
     setStatus("Unterwegs · " .. tree.Name)
 
     while tween.PlaybackState == Enum.PlaybackState.Playing do
-        if not validTarget(tree, character, root, humanoid, revision) then
+        if not validTarget(tree, character, root, humanoid, revision)
+            or not treeCoordinator.positionClear(destination) then
             tween:Cancel()
             break
         end
@@ -2911,7 +3140,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
             and player:GetAttribute("Tool") == "HellChain"
     end
     local function valid()
-        return contextValid() and isAvailable(tree)
+        return contextValid() and isAvailable(tree) and not treeCoordinator.isOccupied(tree)
     end
     local function waitForNative()
         local deadline = os.clock() + 2.5
@@ -3106,7 +3335,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             and root:IsDescendantOf(character) and humanoid.Health > 0
             and player:GetAttribute("Tool") == toolName
     end
-    local function valid() return contextValid() and isAvailable(tree) end
+    local function valid() return contextValid() and isAvailable(tree) and not treeCoordinator.isOccupied(tree) end
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
     if not position then
@@ -3281,7 +3510,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             and root:IsDescendantOf(character) and humanoid.Health > 0
             and player:GetAttribute("Tool") == "Chainsaw"
     end
-    local function valid() return contextValid() and isAvailable(tree) end
+    local function valid() return contextValid() and isAvailable(tree) and not treeCoordinator.isOccupied(tree) end
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
     if not position then
@@ -3446,7 +3675,7 @@ combat.toolStats[profile.tool] = stats end
             and root:IsDescendantOf(character) and humanoid.Health > 0
             and player:GetAttribute("Tool") == profile.tool
     end
-    local function valid() return contextValid() and isAvailable(tree) end
+    local function valid() return contextValid() and isAvailable(tree) and not treeCoordinator.isOccupied(tree) end
     local trace = { tool = profile.tool, treeId = tree:GetAttribute("TreeId"), stage = "approach" } :: { [string]: any }
     stats.lastAttempt = trace
     local position = approachTree(tree, character, root, humanoid, revision, profile)
@@ -3489,7 +3718,7 @@ return end
                 skippedUntil[tree] = nil
                 deadline = os.clock() + profile.timeout
             end
-            if not isAvailable(tree) then return end
+            if not isAvailable(tree) or treeCoordinator.isOccupied(tree) then return end
             if not aimFor() then retryTree(tree, recovery, profile.label .. " hat die Schlagposition verloren")
 return end
             if os.clock() >= deadline then
@@ -4207,7 +4436,7 @@ local function createAbilityController()
             local candidates = {}
             local range = math.max(tonumber(data.spec.Range) or 100, tonumber(data.spec.ChainRange) or 170)
             for _, tree in ipairs(trees:GetChildren()) do
-                if isAvailable(tree) and (skippedUntil[tree] or 0) <= os.clock() then
+                if isAvailable(tree) and not treeCoordinator.isOccupied(tree) and (skippedUntil[tree] or 0) <= os.clock() then
                     local position = treePosition(tree)
                     if position and flat(position - root.Position).Magnitude <= range then
                         table.insert(candidates, { tree = tree, position = position, hp = treeHP(tree) })
@@ -4228,6 +4457,13 @@ local function createAbilityController()
         end
         if not selected or not valid() or player:GetAttribute("Tool") ~= "Leviathan"
             or controller.isFlying() or controller.cooldownLeft() > 0 then return false end
+        for _, tree in ipairs(selected.trees) do
+            if not isAvailable(tree) or treeCoordinator.isOccupied(tree) then return false end
+        end
+        if not treeCoordinator.throwSafe(selected, data.spec, root.Position) then
+            controller.nextTryAt = now + 0.5
+            return false
+        end
         cancelMovement()
         combat.stopSaw()
         combat.stopNative()
@@ -4288,7 +4524,7 @@ local function farmStep()
         if nextRetry < math.huge then
             setStatus("Warte auf nächsten Anlauf · " .. string.format("%.1f", math.max(0, nextRetry - os.clock())) .. " s")
         else
-            setStatus("Kein freigeschalteter Baum in Reichweite")
+            setStatus("Kein freier Baum verfügbar · warte auf Mitspieler / neue Bäume")
         end
         task.wait(0.1)
         return
