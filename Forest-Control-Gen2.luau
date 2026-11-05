@@ -11,6 +11,7 @@ local SAW_RETURN_HEAT = 0.25
 local TREE_DISTANCE = 2
 local TREE_RETRY_AFTER = 5
 local LOG_RETRY_AFTER = 2
+local UNCONFIRMED_HIT_RETRIES = 2
 
 local environment = getgenv and getgenv() or _G
 local KEY = "__BambooTweenFarm"
@@ -4663,6 +4664,8 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
     trace.stage = "settle"
     task.wait(recovery.failures > 0 and math.min(0.35, 0.1 + recovery.failures * 0.1) or profile.settle)
     local budget = math.clamp(math.ceil(hp / profile.damage) * 3 + 6, 6, 200)
+    local unconfirmedHits = 0
+    local maxUnconfirmedRetries = toolName == "Axe" and UNCONFIRMED_HIT_RETRIES or 0
     for _ = 1, budget do
         if not valid() then return end
         while valid() and os.clock() < combat.nextStart do task.wait() end
@@ -4775,6 +4778,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         trace.hpAfter = after
         trace.confirmed = after ~= nil and after < hpBefore - 0.00001 or tree:GetAttribute("Felled") == true
         if trace.confirmed then
+            unconfirmedHits = 0
             if profile.silent then
                 trace.recoveryBefore = math.max(0, combat.nextStart - os.clock())
                 trace.recoveryAfter = trace.recoveryBefore
@@ -4797,8 +4801,17 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             skippedUntil[tree] = nil
         elseif valid() then
             trace.stage = "unconfirmed"
-            retryTree(tree, recovery, label .. " · Treffer nicht vom Server bestätigt")
-            return
+            unconfirmedHits = unconfirmedHits + 1
+            if unconfirmedHits > maxUnconfirmedRetries then
+                retryTree(tree, recovery, label .. " · Treffer nicht vom Server bestätigt")
+                return
+            end
+            trace.sameTreeRetries = (trace.sameTreeRetries or 0) + 1
+            trace.stage = "resync"
+            setStatus(label .. " · Treffer nicht bestätigt · gleicher Baum, neuer Versuch")
+            -- Die schnelle Bestätigung bleibt 0,13 s; nur nach einem fehlenden
+            -- Ack den nativen Takt abwarten, statt den halben Baum zu verlassen.
+            task.wait(math.max(HIT_CONFIRM_TIMEOUT, profile.cycle))
         end
         if not valid() then
             if after == 0 or tree:GetAttribute("Felled") then treeRecovery[tree] = nil end
@@ -4843,6 +4856,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
         local readyBy = os.clock() + 2.5
         local budget = math.clamp(math.ceil(hp / profile.damage) * 3 + 6, 6, 200)
         local cuts = 0
+        local unconfirmedCuts = 0
         while valid() and cuts < budget do
             profile = sawProfile(tree)
             if not profile then return end
@@ -4961,6 +4975,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             trace.hpAfter = after
             trace.confirmed = after ~= nil and after < hpBefore - 0.00001 or tree:GetAttribute("Felled") == true
             if trace.confirmed then
+                unconfirmedCuts = 0
                 stats.confirmed = stats.confirmed + 1
                 stats.lastDamage = math.max(0, hpBefore - (after or 0))
                 stats.lastHP = after or 0
@@ -4969,8 +4984,19 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 recovery.failures = 0
                 skippedUntil[tree] = nil
             elseif valid() then
-                retryTree(tree, recovery, "Sägeschnitt nicht vom Server bestätigt")
-                return
+                unconfirmedCuts = unconfirmedCuts + 1
+                if unconfirmedCuts > UNCONFIRMED_HIT_RETRIES then
+                    retryTree(tree, recovery, "Sägeschnitt wiederholt nicht vom Server bestätigt")
+                    return
+                end
+                trace.sameTreeRetries = (trace.sameTreeRetries or 0) + 1
+                trace.stage = "resync"
+                combat.stopSaw()
+                engageAt = nil
+                nextCut = os.clock() + profile.cycle
+                combat.nextStart = nextCut
+                setStatus("Kettensäge · Schnitt nicht bestätigt · gleicher Baum, neuer Versuch")
+                task.wait(math.max(HIT_CONFIRM_TIMEOUT, profile.cycle))
             end
         end
         if valid() then retryTree(tree, recovery, "Sägebaum benötigt einen weiteren Anlauf") end
