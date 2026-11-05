@@ -993,6 +993,260 @@ local function createThemeStudio(window)
     return studio
 end
 
+-- Schusshilfen verwenden nur die native Waffensteuerung; keine zusätzlichen Schussanfragen.
+local function createGunAssist(getFlags)
+    local manager = {
+        alive = true, binding = nil :: { [string]: any }?, patches = {} :: { [number]: any },
+        nextCheck = 0, status = "", error = nil :: string?, shot = nil :: { [string]: any }?,
+        lastTarget = nil :: Instance?, heights = {} :: { [Instance]: number },
+        stats = { shots = 0, redirected = 0 },
+    }
+    local names = { "Pistol", "Rifle", "Minigun" }
+    local api = getfenv() :: any
+    local inspect = api.getupvalues or (debug :: any).getupvalues
+    local assign = api.setupvalue or (debug :: any).setupvalue
+    local list = api.getrendersteppedlist
+    local function enabled(key) return manager.alive and getFlags()[key] == true end
+    local function report(text)
+        if manager.status == text then return end
+        manager.status = text
+        local control = state.controls.GunAssistStatus
+        if control and isAlive() then control:Set(text) end
+    end
+    local function current(fn, index)
+        return inspect(fn)[index]
+    end
+    local function findFunction(fn, name)
+        for index, value in pairs(inspect(fn)) do
+            if type(value) == "function" and debug.info(value, "n") == name then return value, index end
+        end
+        return nil, nil
+    end
+    local function patch(object, key, group)
+        if type(object) ~= "table" or type(object[key]) ~= "number" then return end
+        for _, saved in ipairs(manager.patches) do
+            if saved.object == object and saved.key == key then
+                if object[key] ~= 0 then saved.original = object[key] end
+                object[key] = 0
+                return
+            end
+        end
+        table.insert(manager.patches, { object = object, key = key, original = object[key], group = group })
+        object[key] = 0
+    end
+    local function restore(group)
+        for index = #manager.patches, 1, -1 do
+            local saved = manager.patches[index]
+            if group == nil or saved.group == group then
+                if saved.object[saved.key] == 0 then saved.object[saved.key] = saved.original end
+                table.remove(manager.patches, index)
+            end
+        end
+    end
+    local function resetRecoil(recoil)
+        if type(recoil) ~= "table" then return end
+        for _, collection in ipairs({ recoil.AimKick, recoil.GunKick }) do
+            if type(collection) == "table" then
+                for _, spring in pairs(collection) do
+                    if type(spring) == "table" then spring.X, spring.V = 0, 0 end
+                end
+            end
+        end
+        if type(recoil.AimClimb) == "table" then
+            recoil.AimClimb.Pitch, recoil.AimClimb.Yaw = 0, 0
+            recoil.AimClimb.PitchTo, recoil.AimClimb.YawTo = 0, 0
+        end
+        recoil.Shake = 0
+        -- AimApplied/ShakeOn räumt der native Render-Schritt selbst auf.
+    end
+    function manager.detach()
+        local binding = manager.binding
+        manager.binding, manager.shot, manager.lastTarget = nil, nil, nil
+        if binding and type(inspect) == "function" and type(assign) == "function" then
+            if current(binding.render, binding.shootIndex) == binding.wrapper then
+                assign(binding.render, binding.shootIndex, binding.shoot)
+            end
+            if current(binding.shoot, binding.probeIndex) == binding.probeWrapper then
+                assign(binding.shoot, binding.probeIndex, binding.probe)
+            end
+        end
+        restore(nil)
+        table.clear(manager.heights)
+    end
+    function manager.destroy()
+        manager.alive = false
+        manager.detach()
+    end
+    function manager.selectTarget(gun)
+        local binding = manager.binding
+        local camera = workspace.CurrentCamera
+        local character = player.Character
+        local head = character and character:FindFirstChild("Head")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local spec = binding and binding.guns[gun]
+        local folder = workspace:FindFirstChild("Monsters")
+        if not camera or not head or not humanoid or humanoid.Health <= 0
+            or player:GetAttribute("Down") == true or not spec or not folder then return nil, nil end
+        local origin = head.Position
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local filter = { camera, folder }
+        for _, who in ipairs(Players:GetPlayers()) do
+            if who.Character then table.insert(filter, who.Character) end
+        end
+        for _, name in ipairs({ "Logs", "GunShells" }) do
+            local object = workspace:FindFirstChild(name)
+            if object then table.insert(filter, object) end
+        end
+        params.FilterDescendantsInstances = filter
+        local viewport = camera.ViewportSize / 2
+        local selected, point, best, nearest
+        for _, model in ipairs(folder:GetChildren()) do
+            if not model:IsA("Model") then continue end
+            local kind = model:GetAttribute("Monster")
+            if kind ~= "Minion" and kind ~= "Guardian" then continue end
+            local hp = model:GetAttribute("HP")
+            local stateName = model:GetAttribute("State")
+            if type(hp) ~= "number" or hp <= 0 or model:GetAttribute("DeadAt")
+                or model:GetAttribute("Hidden") == true or model:GetAttribute("Test") == true
+                or stateName == "Dead" or stateName == "Underground" then continue end
+            local from = model:GetAttribute("MoveFrom")
+            local at = model:GetAttribute("MoveAt")
+            local velocity = model:GetAttribute("MoveVel")
+            local aim
+            if typeof(from) == "Vector3" then
+                local height = manager.heights[model]
+                if not height then height = model:GetExtentsSize().Y; manager.heights[model] = height end
+                aim = from + Vector3.new(0, height / 2 + (tonumber(model:GetAttribute("Hover")) or 0), 0)
+                if typeof(velocity) == "Vector3" and type(at) == "number" then
+                    aim = aim + velocity * math.max(0, workspace:GetServerTimeNow() - at
+                        + math.clamp(player:GetNetworkPing(), 0, 0.1))
+                end
+            else
+                local frame = model:GetBoundingBox()
+                aim = frame.Position
+            end
+            local delta = aim - origin
+            local distance = delta.Magnitude
+            if distance < 0.01 or distance > spec.Range - 0.25 then continue end
+            local screen, visible = camera:WorldToViewportPoint(aim)
+            if not visible or screen.Z <= 0 then continue end
+            local obstruction = workspace:Raycast(origin, delta, params)
+            if obstruction and obstruction.Distance < distance - 0.5 then continue end
+            local score = (Vector2.new(screen.X, screen.Y) - viewport).Magnitude
+            if not best or score < best or math.abs(score - best) < 0.01 and distance < nearest then
+                selected, point, best, nearest = model, aim, score, distance
+            end
+        end
+        return selected, point
+    end
+    local function attach()
+        if type(inspect) ~= "function" or type(assign) ~= "function" or type(list) ~= "function" then return false end
+        local render
+        for _, entry in pairs(list()) do
+            if type(entry) == "table" and entry.Name == "NightGuns" and type(entry.Function) == "function" then
+                render = entry.Function
+                break
+            end
+        end
+        if not render then return false end
+        local shoot, shootIndex = findFunction(render, "shoot")
+        if not shoot then return false end
+        local probe, probeIndex = findFunction(shoot, "monsterOnRay")
+        local kick = findFunction(shoot, "kickFor")
+        if not probe or not kick then return false end
+        local guns, tuning, recoil
+        for _, value in pairs(inspect(shoot)) do
+            if type(value) == "table" and type(value.Rifle) == "table" and type(value.Rifle.Rate) == "number" then guns = value end
+        end
+        for _, value in pairs(inspect(kick)) do
+            if type(value) == "table" then
+                if type(value.Rifle) == "table" and type(value.Rifle.Recoil) == "number" then tuning = value end
+                if type(value.AimKick) == "table" and type(value.GunKick) == "table" then recoil = value end
+            end
+        end
+        if not guns or not tuning or not recoil then return false end
+        local binding = {
+            render = render, shoot = shoot, shootIndex = shootIndex, probe = probe, probeIndex = probeIndex,
+            guns = guns, tuning = tuning, recoil = recoil,
+            wrapper = nil :: any, probeWrapper = nil :: any,
+        }
+        manager.binding = binding
+        binding.probeWrapper = function(...)
+            local shot = manager.shot
+            if shot and shot.target and not shot.redirected and enabled("SilentAim") then
+                shot.redirected = true
+                return shot.target, shot.point
+            end
+            return probe(...)
+        end
+        binding.wrapper = function(gun, ...)
+            if not manager.alive then return shoot(gun, ...) end
+            manager.stats.shots = manager.stats.shots + 1
+            local previous = manager.shot
+            local target, aim
+            if enabled("SilentAim") then target, aim = manager.selectTarget(gun) end
+            local shot = { target = target, point = aim, redirected = false }
+            manager.shot = shot
+            local results = table.pack(pcall(shoot, gun, ...))
+            manager.shot = previous
+            manager.lastTarget = target
+            if shot.redirected then manager.stats.redirected = manager.stats.redirected + 1 end
+            if not results[1] then error(results[2], 0) end
+            return table.unpack(results, 2, results.n)
+        end
+        assign(shoot, probeIndex, binding.probeWrapper)
+        assign(render, shootIndex, binding.wrapper)
+        return true
+    end
+    local function update()
+        local flags = getFlags()
+        if not flags.NoRecoil and not flags.NoSpread and not flags.SilentAim then
+            manager.detach()
+            report("Schusshilfen ausgeschaltet")
+            return
+        end
+        local now = os.clock()
+        if manager.binding and (current(manager.binding.render, manager.binding.shootIndex) ~= manager.binding.wrapper
+            or current(manager.binding.shoot, manager.binding.probeIndex) ~= manager.binding.probeWrapper) then
+            manager.detach()
+        end
+        if not manager.binding then
+            if now < manager.nextCheck then return end
+            manager.nextCheck = now + 1
+            if not attach() then report("Warte auf Waffensteuerung …"); return end
+        end
+        local binding = manager.binding
+        for _, name in ipairs(names) do
+            local spec = binding.guns[name]
+            if flags.NoSpread and spec then patch(spec, "Spread", "spread") end
+            local tune = binding.tuning[name]
+            if flags.NoRecoil and tune then
+                for _, key in ipairs({ "Recoil", "RecoilYaw", "Shake" }) do patch(tune, key, "recoil") end
+                for _, key in ipairs({ "Back", "Up", "Pitch", "Roll", "Yaw" }) do patch(tune.Kick, key, "recoil") end
+            end
+        end
+        if not flags.NoSpread then restore("spread") end
+        if not flags.NoRecoil then restore("recoil") else resetRecoil(binding.recoil) end
+        for model in pairs(manager.heights) do if not model.Parent then manager.heights[model] = nil end end
+        report("Schusshilfen bereit · Pistole / AK / Minigun")
+    end
+    function manager.step()
+        if not manager.alive then return end
+        local ok, message = pcall(update)
+        if not ok then
+            manager.detach()
+            manager.nextCheck = os.clock() + 2
+            report("Schusshilfen warten auf Waffensteuerung …")
+            if manager.error ~= tostring(message) then
+                manager.error = tostring(message)
+                warn("[ForestControl Guns] " .. manager.error)
+            end
+        end
+    end
+    return manager
+end
+
 -- Player-Funktionen besitzen nur ihre eigenen Verbindungen und Physikobjekte.
 local function createPlayerTab(window)
     local RunService = game:GetService("RunService")
@@ -1000,7 +1254,7 @@ local function createPlayerTab(window)
     local tab = window:CreateTab({ name = "Player" })
     local controller = {
         alive = true,
-        enabled = { Fly = false, WalkSpeed = false, Noclip = false },
+        enabled = { Fly = false, WalkSpeed = false, Noclip = false, NoRecoil = false, NoSpread = false, SilentAim = false },
         connections = {},
         collisions = setmetatable({}, { __mode = "k" }),
         flight = nil,
@@ -1009,7 +1263,10 @@ local function createPlayerTab(window)
         focused = true,
     }
     state.playerController = controller
-    local toggleNames = { Fly = "PlayerFly", WalkSpeed = "PlayerWalkSpeed", Noclip = "PlayerNoclip" }
+    local gunAssist = createGunAssist(function() return controller.enabled end)
+    controller.gunAssist = gunAssist
+    local toggleNames = { Fly = "PlayerFly", WalkSpeed = "PlayerWalkSpeed", Noclip = "PlayerNoclip",
+        NoRecoil = "PlayerNoRecoil", NoSpread = "PlayerNoSpread", SilentAim = "PlayerSilentAim" }
 
     local function syncToggle(feature)
         local handle = state.controls[toggleNames[feature]]
@@ -1075,6 +1332,7 @@ local function createPlayerTab(window)
             elseif feature == "WalkSpeed" then restoreWalk()
             elseif feature == "Noclip" then restoreCollisions() end
         end
+        if feature == "NoRecoil" or feature == "NoSpread" or feature == "SilentAim" then gunAssist.step() end
         syncToggle(feature)
         return true
     end
@@ -1091,6 +1349,7 @@ local function createPlayerTab(window)
         stopFlight()
         restoreWalk()
         restoreCollisions()
+        gunAssist.destroy()
         controller.character = nil
     end
 
@@ -1133,6 +1392,7 @@ local function createPlayerTab(window)
 
     local function step()
         if state.configLoading then return end
+        gunAssist.step()
         local character = player.Character
         if character ~= controller.character then
             stopFlight()
@@ -1204,13 +1464,16 @@ local function createPlayerTab(window)
     controller.step = step
 
     tab:CreateText({
-        name = "Bewegung & Keybinds",
+        name = "Player-Funktionen & Keybinds",
         text = "Ohne geladene Config starten Funktionen ausgeschaltet und Keybinds unbelegt. Taste anklicken und belegen; Backspace löscht die Belegung. Noclip aus = Clip.",
     })
     local features = {
         { key = "Fly", name = "Fly", speed = "FlySpeed", hint = "WASD folgt der Kamera · Leertaste hoch · linke Strg runter. Pausiert den Autofarm." },
         { key = "WalkSpeed", name = "Walkspeed", speed = "WalkSpeed", hint = "Eigenen Laufwert einschalten; beim Ausschalten gilt wieder der Spielwert." },
         { key = "Noclip", name = "Noclip / Clip", hint = "Ein: durch Hindernisse bewegen. Aus: ursprüngliche Kollision der Charakterteile wiederherstellen." },
+        { key = "NoRecoil", name = "No Recoil", hint = "Entfernt den lokalen Waffenrückstoß bei Pistole, AK und Minigun." },
+        { key = "NoSpread", name = "No Spread", hint = "Entfernt die lokale Geschossstreuung bei Pistole, AK und Minigun." },
+        { key = "SilentAim", name = "Silent Aim", hint = "Lenkt manuelle Schüsse auf sichtbare kleine Monster und Bosse nächst am Fadenkreuz. Beachtet Reichweite und Hindernisse; bewegt die Kamera nicht." },
     }
     for _, feature in ipairs(features) do
         local key = feature.key
@@ -1238,6 +1501,7 @@ local function createPlayerTab(window)
             end,
         })
     end
+    state.controls.GunAssistStatus = tab:CreateText({ name = "Schusshilfen", text = "Schusshilfen ausgeschaltet" })
     table.insert(controller.connections, UserInputService.WindowFocusReleased:Connect(function()
         controller.focused = false
         if controller.flight then controller.flight.velocity.VectorVelocity = Vector3.zero end
@@ -1348,11 +1612,14 @@ local function createConfigManager(window)
             PlayerFly = controller and controller.enabled.Fly == true or false,
             PlayerWalkSpeed = controller and controller.enabled.WalkSpeed == true or false,
             PlayerNoclip = controller and controller.enabled.Noclip == true or false,
+            PlayerNoRecoil = controller and controller.enabled.NoRecoil == true or false,
+            PlayerNoSpread = controller and controller.enabled.NoSpread == true or false,
+            PlayerSilentAim = controller and controller.enabled.SilentAim == true or false,
         }
     end
     local function snapshot()
         local binds = {}
-        for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip" }) do binds[key] = state.controls[key .. "Keybind"].value end
+        for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip", "NoRecoil", "NoSpread", "SilentAim" }) do binds[key] = state.controls[key .. "Keybind"].value end
         return {
             settings = table.clone(config), modes = modes(), binds = binds,
             theme = state.themeStudio and state.themeStudio.exportJSON() or nil,
@@ -1370,6 +1637,9 @@ local function createConfigManager(window)
         if controller then
             controller.set("WalkSpeed", values.PlayerWalkSpeed == true)
             controller.set("Noclip", values.PlayerNoclip == true)
+            controller.set("NoRecoil", values.PlayerNoRecoil == true)
+            controller.set("NoSpread", values.PlayerNoSpread == true)
+            controller.set("SilentAim", values.PlayerSilentAim == true)
         end
         state.setEnabled(values.FarmEnabled == true)
         if controller then controller.set("Fly", values.PlayerFly == true and not values.FarmEnabled) end
@@ -1383,7 +1653,7 @@ local function createConfigManager(window)
         state.setAutoSell(false)
         local controller = state.playerController
         if controller then
-            for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip" }) do controller.set(key, false) end
+            for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip", "NoRecoil", "NoSpread", "SilentAim" }) do controller.set(key, false) end
         end
     end
     local function validateSettings(values)
