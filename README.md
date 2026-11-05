@@ -28,3 +28,11 @@ Im Tab **Runs & Event** lädt **Nach Weltwechsel automatisch starten** das Scrip
 - **Runs automatisch wiederholen:** kehrt nach dem Chapter-Abschluss zur Lobby zurück. In Frozen Wilds reichen alle zwölf bestätigten Raben und die offene Kiste; die Weltschlange ist für diese Wiederholung nicht erforderlich. In der Lobby wird ein freies Pad verwendet und ein neuer Solo-Run mit der gewählten Welt, Schwierigkeit und Friedlich-Einstellung erstellt. Gesperrte oder abgelaufene Welten werden nicht gestartet.
 
 Für wiederholtes Event-Shard-Farmen Raben, Säulenrätsel und Run-Wiederholung einschalten, die Event-Welt auswählen und den Autofarm aktivieren. Auto-Collect und Auto-Boss bleiben separat steuerbar. Die neuen Aktionen pausieren Farmbewegung und Verkauf während ihrer Interaktionen. Alle Optionen können in den nativen Sirius-Configs gespeichert werden.
+
+## Automatische Run-Upgrades
+
+Der Tab **Upgrades** verbessert bei eingeschalteter Automatik vorhandene Axt, Kettensäge und Klassenwaffen sowie **Chipper-Speed** und **Grasp** bis zu den im Spiel hinterlegten MAX-Stufen. Preise, Besitz und Levels werden laufend neu gelesen; nach jeder Anfrage wartet die Automatik auf die vom Server bestätigte Stufe. Bei fehlenden Münzen wartet sie auf weiteres Verkaufsgeld. Sie läuft unabhängig vom Autofarm und verwendet die normalen Run-Münzen.
+
+**Axt und Kettensäge automatisch kaufen** ergänzt fehlende Standardwerkzeuge, sobald sie bezahlbar sind und ein freigeschalteter Stand verfügbar ist. Eine vorhandene oder permanente Kettensäge wird nicht erneut gekauft; die Axt bleibt als Ersatz für den bestehenden 85-%-Hitzewechsel vorgesehen. Bei erkannten Klassenwaffen wie War-God-Axt, Hellchain oder Katana entfallen beide Standardkäufe. Normale Werkzeug-Upgrades werden weiterhin für bereits vorhandene Werkzeuge durchgeführt. Die Kaufbewegung pausiert Farm, Sammeln und Verkauf und kehrt anschließend zur Ausgangsposition zurück.
+
+Beide Schalter werden in Configs gespeichert und bei Teleports übernommen. Die Upgrade-Automatik startet standardmäßig ausgeschaltet; der Werkzeugkauf-Schalter wirkt nur bei aktiver Upgrade-Automatik.
