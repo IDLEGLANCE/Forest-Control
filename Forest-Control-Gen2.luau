@@ -1905,8 +1905,9 @@ end
         for index = 1, 3 do
             local pillar = hoard:FindFirstChild("Pillar" .. index)
             local prompt = pillar and pillar:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if not pillar or not prompt or not prompt.Enabled or not tonumber(symbols[index])
+            if not pillar or not prompt or not tonumber(symbols[index])
                 or type(pillar:GetAttribute("Rune")) ~= "number" then return false end
+            if pillar:GetAttribute("Rune") ~= tonumber(symbols[index]) and not prompt.Enabled then return false end
             table.insert(pillars, { object = pillar, prompt = prompt, target = tonumber(symbols[index]) })
         end
         local job = beginJob("AutoHoard")
@@ -1936,6 +1937,7 @@ end
         if current and current.EventBoss then return false end
         local areaList = current and current.Areas or chopping.Forest and chopping.Forest.Areas and chopping.Forest.Areas.Order
         if type(areaList) ~= "table" or #areaList == 0 then return false end
+        if (tonumber(workspace:GetAttribute("AreasUnlocked")) or 0) < #areaList then return false end
         for _, area in ipairs(areaList) do
             local key = type(area) == "table" and area.Key or area
             if type(key) ~= "string" then return false end
