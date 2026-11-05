@@ -2478,14 +2478,15 @@ end
         return true
     end
     function controller.createTab(window)
-        local tab = window:CreateTab({ name = "Runs & Event" })
-        tab:CreateSection({ name = "Frozen Wilds · Shards" })
+        local tab = window:CreateTab({ name = "Runs" })
+        local event = window:CreateTab({ name = "Event" })
+        event:CreateSection({ name = "Frozen Wilds · Shards" })
         for _, feature in ipairs({
             { key = "AutoRavens", name = "Raben automatisch einsammeln", hint = "Besucht noch fehlende Raben in freigeschalteten Areas und wartet auf die bestätigte RavensFound-Liste. Unabhängig vom Autofarm." },
             { key = "AutoHoard", name = "Säulenrätsel automatisch lösen", hint = "Ab 90 % geräumter Area 6: Zielsymbole lesen, die drei Säulen drehen und auf die bestätigte Kistenöffnung warten." },
         }) do
             local key = feature.key
-            state.controls[key] = tab:CreateToggle({ name = feature.name, description = feature.hint,
+            state.controls[key] = event:CreateToggle({ name = feature.name, description = feature.hint,
                 value = config[key], flag = "Setting_" .. key,
                 callback = function(value) commitBoolean(key, value) end })
         end
