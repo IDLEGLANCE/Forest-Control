@@ -23,7 +23,7 @@ Die Oberfläche und die bisherigen Funktionen bleiben erhalten. Lokale Benutzerk
 Nach Teleports lädt das Script automatisch erneut. Diese Funktion ist fest aktiviert. Aktuelle Einstellungen, aktive Schalter, Theme und die Bewegungs-Keybinds werden übernommen. Der Executor muss die Teleport-Queue unterstützen.
 
 - **Raben automatisch einsammeln:** besucht fehlende Raben in freigeschalteten Areas und wartet auf die vom Spiel bestätigte Fundliste.
-- **Säulenrätsel automatisch lösen:** startet ab mindestens 90 % geräumter Area 6 und dreht die Säulen anhand der replizierten Zielsymbole. Die Kiste gilt erst bei bestätigtem `Open` als geöffnet.
+- **Säulenrätsel automatisch lösen:** bei freigeschalteter Area 6 priorisiert der aktive Autofarm die sechs vom Spiel markierten Bäume um Runestone 6. Nach dessen bestätigter Aktivierung (`Lit = true`) startet das Rätsel ohne prozentuale Räumungsschwelle; bis zur Kistenöffnung werden keine weiteren Bäume ausgewählt. Die Säulen richten sich nach den replizierten Zielsymbolen; die Kiste gilt erst bei bestätigtem `Open` als geöffnet. Ohne aktiven Autofarm wird der Runestone nicht automatisch freigelegt.
 - **Run automatisch abschließen:** spricht nach geräumten Chapter-Areas und beendetem Guardian-Kampf den Businessman an.
 - **Runs automatisch wiederholen:** kehrt nach dem Chapter-Abschluss zur Lobby zurück. In Frozen Wilds reichen alle zwölf bestätigten Raben und die offene Kiste; die Weltschlange ist für diese Wiederholung nicht erforderlich. In der Lobby wird ein freies Pad verwendet und ein neuer Solo-Run mit der gewählten Welt, Schwierigkeit und Friedlich-Einstellung erstellt. Gesperrte oder abgelaufene Welten werden nicht gestartet.
 
