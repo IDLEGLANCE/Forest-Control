@@ -11,6 +11,8 @@ local SAW_RETURN_HEAT = 0.25
 
 local environment = getgenv and getgenv() or _G
 local KEY = "__BambooTweenFarm"
+local teleportState = environment.__ForestControlTeleportState
+environment.__ForestControlTeleportState = nil
 local previous = environment[KEY]
 local previousConfig = type(previous) == "table"
     and type(previous.config) == "table" and table.clone(previous.config) or nil
@@ -61,6 +63,8 @@ local state = {
     bossController = nil :: { [string]: any }?,
     abilityController = nil :: { [string]: any }?,
     treeCoordinator = nil :: { [string]: any }?,
+    runController = nil :: { [string]: any }?,
+    runBusy = false,
     bossBusy = false,
     bossWorker = nil,
     configLoading = false,
@@ -91,6 +95,14 @@ local config = {
     AutoDetectBackpackCapacity = false,
     ChainsawToolSwitch = true,
     AutoBoss = false,
+    ResumeOnTeleport = true,
+    AutoRavens = false,
+    AutoHoard = false,
+    AutoFinishRun = false,
+    AutoRepeatRun = false,
+    RunDestination = "WarGod",
+    RunDifficulty = "NORMAL",
+    RunPeaceful = false,
 }
 if previousConfig then
     for key, default in pairs(config) do
@@ -121,13 +133,18 @@ local function isGuardianFightActive()
     return type(active) == "string" and active ~= ""
 end
 
+local function isRunTransitionIdle()
+    local controller = state.runController
+    return not state.runBusy and not (controller and (controller.inLobby or controller.ended or controller.departing))
+end
+
 local function isRunning()
-    return isAlive() and state.enabled and not state.bossBusy and not state.sellBusy and not state.configLoading
+    return isAlive() and state.enabled and not state.bossBusy and not state.sellBusy and isRunTransitionIdle() and not state.configLoading
         and not isGuardianFightActive()
 end
 
 local function isBossRunning()
-    return isAlive() and config.AutoBoss and not state.sellBusy and not state.configLoading
+    return isAlive() and config.AutoBoss and not state.sellBusy and isRunTransitionIdle() and not state.configLoading
         and not (state.abilityController and state.abilityController.isFlying())
         and not (state.playerController and state.playerController.enabled and state.playerController.enabled.Fly)
 end
@@ -240,6 +257,7 @@ function state.stop()
     state.revision = state.revision + 1
     cancelMovement()
 
+    if state.runController then state.runController.destroy() end
     if state.treeCoordinator then state.treeCoordinator.destroy() end
     if state.abilityController then state.abilityController.destroy() end
     if state.bossController then state.bossController.destroy() end
@@ -409,6 +427,7 @@ local function commitBoolean(key, value)
         state.configPending[key] = value
     else
         config[key] = value
+        if state.runController then state.runController.changed(key) end
         if key == "AutoDetectBackpackCapacity" then syncSellCapacityUI() end
         if key == "AutoBoss" then
             if value and state.playerController then state.playerController.set("Fly", false) end
@@ -1524,6 +1543,686 @@ local function createPlayerTab(window)
     return tab
 end
 
+-- Weltwechsel, bestätigte Event-Interaktionen und wiederholbare Solo-Runs.
+local function createRunAutomation()
+    local HttpService = game:GetService("HttpService")
+    local api = getfenv() :: any
+    local queue = api.queue_on_teleport or api.queueonteleport
+        or (type(api.syn) == "table" and api.syn.queue_on_teleport)
+    local controller = {
+        alive = true, connections = {} :: { [string]: any }, sources = {} :: { [string]: Instance },
+        worker = nil :: thread?, rpc = nil :: thread?, tween = nil :: Tween?, job = nil :: string?, epoch = 0,
+        queued = false, everQueued = false, queueAvailable = type(queue) == "function", status = "", retry = {} :: { [Instance]: number },
+        teleportToken = HttpService:GenerateGUID(false),
+        inLobby = false, ended = false, departing = false, returning = false, returnAt = 0, returnAttempts = 0,
+        openPad = nil :: string?, launchingUntil = 0, nextLaunch = 0, catalog = nil :: any,
+    }
+    state.runController = controller
+    local function running() return controller.alive and isAlive() end
+    local function report(message)
+        if controller.status == message then return end
+        controller.status = message
+        local control = state.controls.RunStatus
+        if control and running() then control:Set(message) end
+    end
+    local function moduleAt(parent, name)
+        local object = parent and parent:FindFirstChild(name)
+        if not object or not object:IsA("ModuleScript") then return nil end
+        local success, result = pcall(require, object)
+        return success and type(result) == "table" and result or nil
+    end
+    local function rules()
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        local configs = shared and shared:FindFirstChild("Configs")
+        local utilities = shared and shared:FindFirstChild("Utilities")
+        local lobby = ReplicatedStorage:FindFirstChild("Lobby")
+        local chapter = moduleAt(configs, "ChapterWorld")
+        local chopping = moduleAt(configs, "Chopping")
+        local placeMode = moduleAt(utilities, "PlaceMode")
+        local catalog = moduleAt(lobby, "LobbyConfig")
+        if catalog then controller.catalog = catalog end
+        if not chapter or not chopping then return nil end
+        local isLobby = placeMode and placeMode.IsLobby and placeMode.IsLobby()
+            or chopping.Places and game.PlaceId == chopping.Places.Lobby
+        local current = not isLobby and chapter.Current() or nil
+        return { lobby = isLobby == true, chapter = current, chopping = chopping, catalog = catalog }
+    end
+    function controller.catalogOptions()
+        local lobby = ReplicatedStorage:FindFirstChild("Lobby")
+        local catalog = controller.catalog or moduleAt(lobby, "LobbyConfig")
+        controller.catalog = catalog
+        local worlds, difficulties, worldKeys = {}, {}, {}
+        if catalog then
+            for _, entry in ipairs(catalog.Maps or {}) do
+                if entry.Hidden ~= true and (not entry.Ends or entry.Ends > os.time()) then
+                    local label = entry.Name .. " (" .. entry.Key .. ")"
+                    table.insert(worlds, label)
+                    worldKeys[label] = entry.Key
+                end
+            end
+            for _, entry in ipairs(catalog.Difficulties or {}) do table.insert(difficulties, entry.Name) end
+        end
+        return worlds, difficulties, worldKeys
+    end
+    function controller.validateSetting(key, value)
+        if type(value) ~= "string" then return false end
+        local _, difficulties, worlds = controller.catalogOptions()
+        if key == "RunDestination" then
+            for _, worldKey in pairs(worlds) do if value == worldKey then return true end end
+        elseif key == "RunDifficulty" then
+            return table.find(difficulties, value) ~= nil
+        end
+        return false
+    end
+    function controller.displaySetting(key, value)
+        if key == "RunDestination" then
+            local _, _, worldKeys = controller.catalogOptions()
+            for label, worldKey in pairs(worldKeys) do if worldKey == value then return label end end
+        end
+        return value
+    end
+    function controller.cancel()
+        controller.epoch = controller.epoch + 1
+        if controller.rpc then pcall(task.cancel, controller.rpc); controller.rpc = nil end
+        if controller.tween then controller.tween:Cancel(); controller.tween = nil end
+        state.runBusy = false
+        controller.job = nil
+    end
+    local function writeTeleportRecord(record)
+        if type(api.writefile) ~= "function" then return end
+        pcall(function()
+            if type(api.makefolder) == "function" and (type(api.isfolder) ~= "function" or not api.isfolder("ForestControl")) then api.makefolder("ForestControl") end
+            api.writefile("ForestControl/TeleportResume.json", HttpService:JSONEncode(record))
+        end)
+    end
+    function controller.changed(key)
+        if controller.job == key and config[key] ~= true then controller.cancel() end
+        if key == "AutoRepeatRun" and config.AutoRepeatRun ~= true then
+            controller.departing, controller.returning = false, false
+            controller.returnAttempts = 0
+        end
+        if key == "ResumeOnTeleport" and config.ResumeOnTeleport ~= true and controller.queued then
+            writeTeleportRecord({ version = 1, gameId = game.GameId, expires = os.time() + 900,
+                token = controller.teleportToken, cancelled = true })
+        end
+    end
+    function controller.destroy()
+        if controller.everQueued then
+            writeTeleportRecord({ version = 1, gameId = game.GameId, expires = os.time() + 900,
+                token = controller.teleportToken, cancelled = true })
+        end
+        controller.alive = false
+        controller.cancel()
+        for _, connection in pairs(controller.connections) do connection:Disconnect() end
+        table.clear(controller.connections)
+        if controller.worker and controller.worker ~= coroutine.running() then pcall(task.cancel, controller.worker) end
+        controller.worker = nil
+    end
+    local function capture()
+        local modes = { farm = state.enabled, collect = state.collectEnabled, sell = state.sellEnabled,
+            player = state.playerController and table.clone(state.playerController.enabled) or {} }
+        local binds = {}
+        for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip" }) do
+            local handle = state.controls[key .. "Keybind"]
+            if handle then binds[key] = handle.value.Name end
+        end
+        return { version = 1, gameId = game.GameId, expires = os.time() + 900, token = controller.teleportToken,
+            settings = table.clone(config), modes = modes, binds = binds,
+            theme = state.themeStudio and state.themeStudio.exportJSON() or nil }
+    end
+    function controller.prepareTeleport()
+        if not running() or not config.ResumeOnTeleport then return false end
+        if not controller.queueAvailable then report("Weltwechsel: Executor unterstützt keinen Teleport-Neustart"); return false end
+        local record = capture()
+        writeTeleportRecord(record)
+        if controller.queued then return true end
+        local payload = HttpService:JSONEncode(record)
+        local loader = string.format([=[
+if not game:IsLoaded() then game.Loaded:Wait() end
+local env = getgenv and getgenv() or _G
+if env.__ForestControlTeleportBoot == game.JobId then return end
+local data = game:GetService("HttpService"):JSONDecode(%q)
+if type(readfile) == "function" then
+    local ok, recent = pcall(function()
+        local text = readfile("ForestControl/TeleportResume.json")
+        assert(#text < 131072)
+        return game:GetService("HttpService"):JSONDecode(text)
+    end)
+    if ok and type(recent) == "table" and recent.version == 1 and recent.gameId == data.gameId
+        and type(recent.expires) == "number" and recent.expires >= os.time() then data = recent end
+end
+if data.cancelled then return end
+if game.GameId ~= data.gameId or os.time() > data.expires then return end
+env.__ForestControlTeleportBoot = game.JobId
+env.__ForestControlTeleportState = data
+for attempt = 1, 3 do
+    local ok, message = pcall(function()
+        local source = game:HttpGet("https://raw.githubusercontent.com/IDLEGLANCE/Forest-Control/main/Forest-Control-Gen2.luau")
+        local fn, reason = loadstring(source)
+        assert(fn, reason)
+        env.__ForestControlTeleportState = data
+        fn()
+        assert(env.__BambooTweenFarm and env.__BambooTweenFarm.alive, "Forest Control nicht bereit")
+    end)
+    if ok then return end
+    if attempt == 3 then warn("[ForestControl Teleport] " .. tostring(message)) else task.wait(2) end
+end
+]=], payload)
+        local accepted, message = pcall(queue, loader)
+        controller.queued = accepted
+        controller.everQueued = controller.everQueued or accepted
+        if not accepted then report("Teleport-Neustart fehlgeschlagen: " .. tostring(message)) end
+        return accepted
+    end
+    controller.connections.Teleport = player.OnTeleport:Connect(function(phase)
+        if phase == Enum.TeleportState.Started or phase == Enum.TeleportState.InProgress then
+            controller.prepareTeleport()
+            if controller.departing or controller.ended then controller.returning = true end
+        elseif phase == Enum.TeleportState.Failed then
+            controller.queued = false
+            controller.launchingUntil, controller.returning = 0, false
+            controller.nextLaunch = os.clock() + 8
+            report("Teleport fehlgeschlagen · erneuter Versuch folgt")
+        end
+    end)
+    local function connect(name, source, callback)
+        if controller.sources[name] == source then return end
+        if controller.connections[name] then controller.connections[name]:Disconnect() end
+        controller.sources[name] = source
+        controller.connections[name] = source.OnClientEvent:Connect(callback)
+    end
+    local function bindRemotes()
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        local services = shared and shared:FindFirstChild("Services")
+        local chop = services and services:FindFirstChild("ChopRemotes")
+        local ended = chop and chop:FindFirstChild("RunEnded")
+        if ended and ended:IsA("RemoteEvent") then
+            connect("RunEnded", ended, function(data)
+                if type(data) ~= "table" or data.Staying then return end
+                controller.ended = true
+                if data.Returning then controller.returning = true end
+                controller.cancel()
+            end)
+        end
+        local lobby = ReplicatedStorage:FindFirstChild("Lobby")
+        local remotes = lobby and lobby:FindFirstChild("Remotes")
+        local open = remotes and remotes:FindFirstChild("OpenCreate")
+        if open and open:IsA("RemoteEvent") then
+            connect("OpenCreate", open, function(padName)
+                controller.openPad = type(padName) == "string" and padName or nil
+            end)
+        end
+        return chop, remotes
+    end
+    local function aliveCharacter()
+        local character = player.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local human = character and character:FindFirstChildOfClass("Humanoid")
+        if not root or not human or human.Health <= 0 or player:GetAttribute("Down") == true then return nil end
+        return character, root
+    end
+    local function canAct()
+        return running() and not state.configLoading and not state.sellBusy and not state.bossBusy
+            and not isGuardianFightActive() and not controller.ended and not controller.departing
+            and not (state.abilityController and state.abilityController.isFlying())
+            and not (state.playerController and state.playerController.enabled.Fly)
+            and player:GetAttribute("InCutscene") ~= true
+    end
+    local function beginJob(kind)
+        local character, root = aliveCharacter()
+        if not character or not canAct() then return nil end
+        controller.cancel()
+        controller.job, state.runBusy = kind, true
+        state.revision = state.revision + 1
+        cancelMovement()
+        if state.treeCoordinator then state.treeCoordinator.clear() end
+        if state.combat then
+            if state.combat.stopSaw then state.combat.stopSaw() end
+            if state.combat.stopNative then state.combat.stopNative() end
+        end
+        return { kind = kind, epoch = controller.epoch, character = character, root = root }
+    end
+    local function jobValid(job)
+        return canAct() and controller.epoch == job.epoch and controller.job == job.kind
+            and player.Character == job.character and job.root:IsDescendantOf(job.character)
+            and job.character:FindFirstChildOfClass("Humanoid") ~= nil
+            and job.character:FindFirstChildOfClass("Humanoid").Health > 0 and config[job.kind] == true
+    end
+    local function finishJob(job)
+        if controller.epoch == job.epoch then controller.cancel() end
+    end
+    local function move(job, position, radius)
+        if not jobValid(job) then return false end
+        local delta = position - job.root.Position
+        if delta.Magnitude <= radius then return true end
+        local duration = math.max(0.05, delta.Magnitude / math.max(config.Speed, 1))
+        local tween = TweenService:Create(job.root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = CFrame.new(position) * job.root.CFrame.Rotation })
+        controller.tween = tween
+        tween:Play()
+        local deadline = os.clock() + duration + 1
+        while jobValid(job) and os.clock() < deadline and (job.root.Position - position).Magnitude > radius do task.wait(0.04) end
+        tween:Cancel()
+        if controller.tween == tween then controller.tween = nil end
+        return jobValid(job) and (job.root.Position - position).Magnitude <= radius
+    end
+    local function promptPosition(prompt)
+        local parent = prompt and prompt.Parent
+        if parent and parent:IsA("Attachment") then return parent.WorldPosition end
+        if parent and parent:IsA("BasePart") then return parent.Position end
+        if parent and parent:IsA("Model") then return parent:GetPivot().Position end
+        return nil
+    end
+    local function usePrompt(job, prompt, acknowledged)
+        local position = promptPosition(prompt)
+        if not position or not prompt.Enabled or not jobValid(job) then return false end
+        local offset = Vector3.new(job.root.Position.X - position.X, 0, job.root.Position.Z - position.Z)
+        offset = offset.Magnitude > 0.01 and offset.Unit or Vector3.new(1, 0, 0)
+        local radius = math.min(3, math.max(0.5, prompt.MaxActivationDistance / 3))
+        local destination = position + offset * radius
+        if not move(job, destination, 1) then return false end
+        local settleUntil = os.clock() + 0.2
+        repeat task.wait(0.04) until not jobValid(job) or os.clock() >= settleUntil
+        if not jobValid(job) or not prompt:IsDescendantOf(workspace) or not prompt.Enabled
+            or (job.root.Position - position).Magnitude > prompt.MaxActivationDistance - 0.5 then return false end
+        if type(api.fireproximityprompt) == "function" then
+            api.fireproximityprompt(prompt)
+        else
+            prompt:InputHoldBegin()
+            local untilAt = os.clock() + prompt.HoldDuration + 0.05
+            repeat task.wait(0.04) until not jobValid(job) or os.clock() >= untilAt
+            prompt:InputHoldEnd()
+        end
+        local deadline = os.clock() + 1.6
+        repeat
+            if acknowledged() then return true end
+            task.wait(0.05)
+        until not jobValid(job) or os.clock() >= deadline
+        return acknowledged()
+    end
+    local function foundRavens()
+        local result = {}
+        local encoded = player:GetAttribute("RavensFound")
+        if type(encoded) ~= "string" then return result end
+        local ok, values = pcall(HttpService.JSONDecode, HttpService, encoded)
+        if ok and type(values) == "table" then for _, id in pairs(values) do result[id] = true end end
+        return result
+    end
+    local function areaAllowed(object, current)
+        if not current or type(current.Areas) ~= "table" then return false end
+        local unlocked = workspace:GetAttribute("AreasUnlocked")
+        if type(unlocked) ~= "number" then return false end
+        local area = object:GetAttribute("Area")
+        for index, entry in ipairs(current.Areas) do if entry.Key == area then return index <= unlocked end end
+        return false
+    end
+    local function collectRaven(wild, current)
+        local ravens = wild:FindFirstChild("Ravens")
+        local _, root = aliveCharacter()
+        if not ravens or not root then return false end
+        local found, best, nearest = foundRavens(), math.huge, nil
+        local count = 0
+        for _ in pairs(found) do count = count + 1 end
+        for _, raven in ipairs(ravens:GetChildren()) do
+            if raven:IsA("Model") and not found[raven:GetAttribute("RavenId") or raven.Name]
+                and areaAllowed(raven, current) and (controller.retry[raven] or 0) <= os.clock() then
+                local prompt = raven:FindFirstChildWhichIsA("ProximityPrompt", true)
+                local position = prompt and promptPosition(prompt)
+                local distance = position and (position - root.Position).Magnitude or math.huge
+                if prompt and prompt.Enabled and distance < best then nearest, best = raven, distance end
+            end
+        end
+        if not nearest then
+            if count >= (tonumber(ravens:GetAttribute("Total")) or 12) then report("Raben · alle " .. count .. " vom Server bestätigt") end
+            return false
+        end
+        local job = beginJob("AutoRavens")
+        if not job then return false end
+        local raven = nearest
+        report("Raben · " .. count .. "/" .. tostring(ravens:GetAttribute("Total") or 12) .. " · " .. raven.Name)
+        local id = raven:GetAttribute("RavenId") or raven.Name
+        local success = usePrompt(job, raven:FindFirstChildWhichIsA("ProximityPrompt", true), function() return foundRavens()[id] == true end)
+        controller.retry[raven] = os.clock() + (success and 0 or 8)
+        finishJob(job)
+        return true
+    end
+    local function solveHoard(wild, current)
+        local hoard = wild:FindFirstChild("Hoard")
+        if not hoard or hoard:GetAttribute("Open") == true then return false end
+        local area = current and current.Areas and current.Areas[6]
+        local total = area and workspace:GetAttribute("BiomeTotal_" .. area.Key)
+        local left = area and workspace:GetAttribute("AreaLeft_" .. area.Key)
+        if not area or (tonumber(workspace:GetAttribute("AreasUnlocked")) or 0) < 6
+            or type(total) ~= "number" or total <= 0 or type(left) ~= "number" or left > total * 0.1 then
+            report("Kiste wartet · Area 6 muss mindestens 90 % geräumt sein")
+            return false
+        end
+        if (controller.retry[hoard] or 0) > os.clock() then return false end
+        local target = hoard:GetAttribute("Target")
+        if type(target) ~= "string" then return false end
+        local symbols = string.split(target, ",")
+        if #symbols ~= 3 then return false end
+        local pillars = {}
+        for index = 1, 3 do
+            local pillar = hoard:FindFirstChild("Pillar" .. index)
+            local prompt = pillar and pillar:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if not pillar or not prompt or not prompt.Enabled or not tonumber(symbols[index])
+                or type(pillar:GetAttribute("Rune")) ~= "number" then return false end
+            table.insert(pillars, { object = pillar, prompt = prompt, target = tonumber(symbols[index]) })
+        end
+        local job = beginJob("AutoHoard")
+        if not job then return false end
+        local success = true
+        for index, entry in ipairs(pillars) do
+            local turns = 0
+            while jobValid(job) and hoard:GetAttribute("Open") ~= true and entry.object:GetAttribute("Rune") ~= entry.target and turns < 8 do
+                report("Kiste · Säule " .. index .. " auf Symbol " .. entry.target .. " drehen")
+                local previous = entry.object:GetAttribute("Rune")
+                if not usePrompt(job, entry.prompt, function() return entry.object:GetAttribute("Rune") ~= previous or hoard:GetAttribute("Open") == true end) then success = false; break end
+                turns = turns + 1
+                task.wait(0.15)
+            end
+            if not jobValid(job) or not success or turns == 8 then success = false; break end
+        end
+        if success and jobValid(job) then
+            local deadline = os.clock() + 2
+            repeat task.wait(0.05) until not jobValid(job) or hoard:GetAttribute("Open") == true or os.clock() >= deadline
+        end
+        report(hoard:GetAttribute("Open") == true and "Kiste geöffnet · vom Server bestätigt" or "Kiste noch nicht bestätigt · neuer Versuch nach weiterem Abbau")
+        controller.retry[hoard] = os.clock() + 8
+        finishJob(job)
+        return true
+    end
+    local function finishRun(current, chopping)
+        if current and current.EventBoss then return false end
+        local areaList = current and current.Areas or chopping.Forest and chopping.Forest.Areas and chopping.Forest.Areas.Order
+        if type(areaList) ~= "table" or #areaList == 0 then return false end
+        for _, area in ipairs(areaList) do
+            local key = type(area) == "table" and area.Key or area
+            if type(key) ~= "string" then return false end
+            local left = workspace:GetAttribute("AreaLeft_" .. key)
+            if type(left) ~= "number" or left > 0 then return false end
+        end
+        local map = workspace:FindFirstChild("Map")
+        local reward = map and map:FindFirstChild("Reward")
+        local businessman = reward and reward:FindFirstChild("Businessman")
+        local prompt = businessman and businessman:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if not prompt or not prompt.Enabled or (controller.retry[prompt] or 0) > os.clock() then return false end
+        local job = beginJob("AutoFinishRun")
+        if not job then return false end
+        report("Run abschließen · Businessman ansprechen")
+        local previous = workspace:GetAttribute("CashOutAt")
+        usePrompt(job, prompt, function() return controller.ended or workspace:GetAttribute("CashOutAt") ~= previous end)
+        controller.retry[prompt] = os.clock() + 8
+        finishJob(job)
+        return true
+    end
+    local function returnToLobby(chop, places, eventComplete)
+        if not controller.queueAvailable or not config.ResumeOnTeleport then
+            report("Auto-Run benötigt aktivierten Teleport-Neustart und Executor-Unterstützung"); return
+        end
+        if controller.returning then report("Run beendet · Rückkehr zur Lobby läuft"); return end
+        if controller.returnAttempts >= 3 then report("Lobby-Teleport nicht bestätigt · Wiederholung aus- und einschalten für neuen Versuch"); return end
+        if os.clock() < controller.returnAt then return end
+        local remote = chop and chop:FindFirstChild("ReturnToLobby")
+        if not eventComplete and (not remote or not remote:IsA("RemoteEvent")) then return end
+        if eventComplete and (not places or type(places.Lobby) ~= "number") then return end
+        if eventComplete and not controller.departing then
+            local job = beginJob("AutoRepeatRun")
+            if job then finishJob(job) end
+            state.revision = state.revision + 1
+            cancelMovement()
+        end
+        controller.cancel()
+        controller.departing = eventComplete == true
+        report(eventComplete and "12 Raben und Kiste bestätigt · zurück zur Lobby für nächsten Run" or "Run beendet · zurück zur Lobby und neuen Run starten")
+        controller.returnAt, controller.returnAttempts = os.clock() + 5, controller.returnAttempts + 1
+        if eventComplete then
+            -- Normale Client-Teleport-API: Event-Rewards sind bereits bestätigt; kein vorgetäuschter Run-Abschluss.
+            local accepted, reason = pcall(function() game:GetService("TeleportService"):Teleport(places.Lobby, player) end)
+            if not accepted then report("Lobby-Teleport fehlgeschlagen: " .. tostring(reason)) end
+        else
+            remote:FireServer()
+        end
+    end
+    local function eventRewardsComplete(wild)
+        local ravens, hoard = wild:FindFirstChild("Ravens"), wild:FindFirstChild("Hoard")
+        if not ravens or not hoard or hoard:GetAttribute("Open") ~= true then return false end
+        local found, count = foundRavens(), 0
+        for _, raven in ipairs(ravens:GetChildren()) do
+            if raven:IsA("Model") then
+                if not found[raven:GetAttribute("RavenId") or raven.Name] then return false end
+                count = count + 1
+            end
+        end
+        return count >= (tonumber(ravens:GetAttribute("Total")) or 12)
+    end
+    local function freePad(pad)
+        if not pad:IsA("Model") then return false end
+        local status = pad:GetAttribute("Status")
+        if status ~= nil and status ~= "Idle" then return false end
+        if pad:GetAttribute("Host") ~= nil or (tonumber(pad:GetAttribute("Members")) or 0) > 0 then return false end
+        for _, peer in ipairs(Players:GetPlayers()) do
+            if peer ~= player then
+                local root = peer.Character and peer.Character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local delta = root.Position - pad:GetPivot().Position
+                    if Vector2.new(delta.X, delta.Z).Magnitude <= 6.5 and delta.Y > -2 and delta.Y < 9 then return false end
+                end
+            end
+        end
+        return true
+    end
+    local function launchRun(data, remotes)
+        if os.clock() < controller.nextLaunch or os.clock() < controller.launchingUntil then return end
+        if not controller.queueAvailable or not config.ResumeOnTeleport then
+            report("Auto-Run benötigt aktivierten Teleport-Neustart und Executor-Unterstützung"); return
+        end
+        if player:GetAttribute("Loaded") ~= true or not data.catalog then report("Lobby · warte auf Spielerdaten"); return end
+        local selected, difficulty
+        for _, entry in ipairs(data.catalog.Maps or {}) do if entry.Key == config.RunDestination then selected = entry; break end end
+        for _, entry in ipairs(data.catalog.Difficulties or {}) do if entry.Name == config.RunDifficulty then difficulty = entry; break end end
+        local wins = tonumber(player:GetAttribute("Wins")) or 0
+        if not selected or selected.Hidden == true or selected.Ends and selected.Ends <= os.time() then report("Gewählte Welt ist nicht mehr verfügbar"); return end
+        if not difficulty or wins < (selected.Wins or 0) or wins < (difficulty.Wins or 0) then report("Welt oder Schwierigkeit noch nicht freigeschaltet"); return end
+        local lobby = workspace:FindFirstChild("Lobby")
+        local pads = lobby and lobby:FindFirstChild("LobbyPads")
+        local _, root = aliveCharacter()
+        if not pads or not root or not remotes then report("Lobby · warte auf Startpads"); return end
+        local party = player:GetAttribute("PartyPad")
+        local pad = type(party) == "string" and pads:FindFirstChild(party) or nil
+        if pad then
+            if tonumber(pad:GetAttribute("Host")) ~= player.UserId then report("Andere Party aktiv · automatischer Start wartet"); return end
+            local status = pad:GetAttribute("Status")
+            if status ~= nil and status ~= "Idle" and controller.openPad ~= pad.Name then report("Eigene Party · warte auf Start"); return end
+        else
+            local distance = math.huge
+            for _, candidate in ipairs(pads:GetChildren()) do
+                if freePad(candidate) then
+                    local candidateDistance = (candidate:GetPivot().Position - root.Position).Magnitude
+                    if candidateDistance < distance then pad, distance = candidate, candidateDistance end
+                end
+            end
+        end
+        if not pad then report("Lobby · warte auf ein freies Startpad"); return end
+        local job = beginJob("AutoRepeatRun")
+        if not job then return end
+        report("Lobby · Solo-Run starten: " .. selected.Name .. " · " .. difficulty.Name)
+        if controller.openPad ~= pad.Name then
+            if not move(job, pad:GetPivot().Position + Vector3.new(0, 3, 0), 1) then finishJob(job); return end
+            local deadline = os.clock() + 5
+            repeat task.wait(0.05) until not jobValid(job) or controller.openPad == pad.Name or os.clock() >= deadline
+        end
+        local create = remotes:FindFirstChild("CreateParty")
+        local host = tonumber(pad:GetAttribute("Host"))
+        if not jobValid(job) or controller.openPad ~= pad.Name or host and host ~= player.UserId
+            or not create or not create:IsA("RemoteFunction") then
+            controller.nextLaunch = os.clock() + 8
+            finishJob(job)
+            return
+        end
+        controller.nextLaunch = os.clock() + 15
+        -- Ein Aufruf pro bestätigtem Pad; keine wiederholten Requests während des Starts.
+        local result = { done = false, success = false, response = nil :: any }
+        local rpc = task.spawn(function()
+            local success, response = pcall(create.InvokeServer, create, pad.Name, difficulty.Name, 1, selected.Key, config.RunPeaceful and selected.Peaceful ~= false)
+            result.success, result.response, result.done = success, response, true
+        end)
+        controller.rpc = rpc
+        local deadline = os.clock() + 12
+        repeat task.wait(0.05) until result.done or not jobValid(job) or os.clock() >= deadline
+        if not result.done then pcall(task.cancel, rpc) end
+        if controller.rpc == rpc then controller.rpc = nil end
+        if not jobValid(job) then finishJob(job); return end
+        local success, response = result.success, result.response
+        if success and type(response) == "table" and response.Ok then
+            controller.launchingUntil = os.clock() + 30
+            report("Solo-Run erstellt · warte auf Teleport")
+        else
+            report("Run-Start abgelehnt · " .. tostring(type(response) == "table" and (response.Message or response.Error) or response))
+            if not result.done then controller.launchingUntil = os.clock() + 30; report("Run-Start noch nicht bestätigt · warte auf Server oder Teleport") end
+        end
+        finishJob(job)
+    end
+    function controller.step()
+        local chop, lobbyRemotes = bindRemotes()
+        if state.configLoading then return end
+        local data = rules()
+        if not data then report("Warte auf Welt- und Run-Daten"); return end
+        controller.inLobby = data.lobby
+        if data.lobby then
+            controller.ended = false
+            if config.AutoRepeatRun then launchRun(data, lobbyRemotes) else report("Lobby · automatischer Run-Start ausgeschaltet") end
+            return
+        end
+        if playerGui:FindFirstChild("RunEnd") then controller.ended = true end
+        if controller.ended then
+            if config.AutoRepeatRun then returnToLobby(chop, data.chopping.Places, false) else report("Run beendet · automatische Wiederholung ausgeschaltet") end
+            return
+        end
+        local wild = workspace:FindFirstChild("FrostWilds")
+        if config.AutoRepeatRun and wild and data.chapter and data.chapter.Key == "WarGod"
+            and (controller.departing or eventRewardsComplete(wild)) then
+            returnToLobby(chop, data.chopping.Places, true)
+            return
+        end
+        if not canAct() then return end
+        if wild and data.chapter and data.chapter.Key == "WarGod" then
+            if config.AutoRavens and collectRaven(wild, data.chapter) then return end
+            if config.AutoHoard and solveHoard(wild, data.chapter) then return end
+        end
+        if config.AutoFinishRun and finishRun(data.chapter, data.chopping) then return end
+        if not config.AutoRavens and not config.AutoHoard and not config.AutoFinishRun then report("Bereit · Run- und Event-Automatik ausgeschaltet") end
+        for object in pairs(controller.retry) do if not object:IsDescendantOf(workspace) then controller.retry[object] = nil end end
+    end
+    function controller.restore(payload)
+        if type(payload) ~= "table" or payload.version ~= 1 or payload.gameId ~= game.GameId
+            or type(payload.expires) ~= "number" or payload.expires < os.time() then return false end
+        state.configLoading = true
+        for key, value in pairs(payload.settings or {}) do
+            if type(value) == type(config[key]) and (type(value) ~= "string" or controller.validateSetting(key, value)) then config[key] = value end
+        end
+        config.RetryAfter = math.clamp(config.RetryAfter, 0, 5)
+        for key, value in pairs(config) do
+            local control = state.controls[key]
+            if control then
+                local display = value
+                if key == "RunDestination" then
+                    local _, _, worldKeys = controller.catalogOptions()
+                    for label, worldKey in pairs(worldKeys) do if worldKey == value then display = label end end
+                end
+                control:Set(type(display) == "number" and format(display) or display, true)
+            end
+        end
+        syncSellCapacityUI()
+        for key, name in pairs(payload.binds or {}) do
+            local control = state.controls[key .. "Keybind"]
+            local found, code = pcall(function() return Enum.KeyCode[name] end)
+            if control and found and code then control:Set(code, true) end
+        end
+        if type(payload.theme) == "string" and state.themeStudio then pcall(state.themeStudio.importJSON, payload.theme) end
+        state.configLoading = false
+        local modes = payload.modes or {}
+        for key, value in pairs(modes.player or {}) do state.playerController.set(key, value == true) end
+        state.setEnabled(modes.farm == true)
+        state.setAutoCollect(modes.collect == true)
+        state.setAutoSell(modes.sell == true)
+        return true
+    end
+    function controller.createTab(window)
+        local tab = window:CreateTab({ name = "Runs & Event" })
+        state.controls.ResumeOnTeleport = tab:CreateToggle({
+            name = "Nach Weltwechsel automatisch starten", value = config.ResumeOnTeleport,
+            flag = "Setting_ResumeOnTeleport",
+            description = "Lädt Forest Control nach Teleports erneut und übernimmt aktuelle Einstellungen und Schalter. Benötigt Teleport-Queue-Unterstützung des Executors.",
+            callback = function(value) commitBoolean("ResumeOnTeleport", value) end,
+        })
+        tab:CreateSection({ name = "Frozen Wilds · Shards" })
+        for _, feature in ipairs({
+            { key = "AutoRavens", name = "Raben automatisch einsammeln", hint = "Besucht noch fehlende Raben in freigeschalteten Areas und wartet auf die bestätigte RavensFound-Liste. Unabhängig vom Autofarm." },
+            { key = "AutoHoard", name = "Säulenrätsel automatisch lösen", hint = "Ab 90 % geräumter Area 6: Zielsymbole lesen, die drei Säulen drehen und auf die bestätigte Kistenöffnung warten." },
+        }) do
+            local key = feature.key
+            state.controls[key] = tab:CreateToggle({ name = feature.name, description = feature.hint,
+                value = config[key], flag = "Setting_" .. key,
+                callback = function(value) commitBoolean(key, value) end })
+        end
+        tab:CreateSection({ name = "Run-Abschluss & Wiederholung" })
+        state.controls.AutoFinishRun = tab:CreateToggle({
+            name = "Run automatisch abschließen", value = config.AutoFinishRun, flag = "Setting_AutoFinishRun",
+            description = "Spricht nach vollständig geräumten Chapter-Areas und beendetem Bosskampf den Businessman an. Event-Bosse behalten ihren eigenen Abschluss.",
+            callback = function(value) commitBoolean("AutoFinishRun", value) end,
+        })
+        local worlds, difficulties, worldKeys = controller.catalogOptions()
+        local function choice(key, value)
+            if syncing or not running() or type(value) ~= "string" then return end
+            if key == "RunDestination" then value = worldKeys[value] end
+            if not controller.validateSetting(key, value) then return end
+            if state.configLoading then state.configPending[key] = value else config[key] = value; controller.cancel() end
+        end
+        state.controls.RunDestination = tab:CreateDropdown({
+            name = "Welt für neue Runs", options = worlds,
+            value = { controller.displaySetting("RunDestination", config.RunDestination) },
+            flag = "Setting_RunDestination", description = "Erstellt einen neuen Solo-Run in der ausgewählten verfügbaren Welt. Freischaltungen und Event-Endzeiten werden geprüft.",
+            callback = function(value) choice("RunDestination", value) end,
+        })
+        state.controls.RunDifficulty = tab:CreateDropdown({
+            name = "Schwierigkeit", options = difficulties, value = { config.RunDifficulty },
+            flag = "Setting_RunDifficulty", callback = function(value) choice("RunDifficulty", value) end,
+        })
+        state.controls.RunPeaceful = tab:CreateToggle({
+            name = "Neue Runs friedlich starten", value = config.RunPeaceful, flag = "Setting_RunPeaceful",
+            description = "Wird nur gesetzt, wenn die gewählte Welt den Friedlich-Modus unterstützt.",
+            callback = function(value) commitBoolean("RunPeaceful", value) end,
+        })
+        state.controls.AutoRepeatRun = tab:CreateToggle({
+            name = "Runs automatisch wiederholen", value = config.AutoRepeatRun, flag = "Setting_AutoRepeatRun",
+            description = "Chapter: nach RunEnded zur Lobby. Frozen Wilds: sobald alle 12 Raben und die Kiste bestätigt sind. Danach neuen Solo-Run starten; aktuelle Farm-/Sammel-/Boss-Schalter werden übernommen.",
+            callback = function(value) commitBoolean("AutoRepeatRun", value) end,
+        })
+        state.controls.RunStatus = tab:CreateText({ name = "Run-Status", text = controller.queueAvailable
+            and "Teleport-Neustart verfügbar · Run- und Event-Automatik ausgeschaltet"
+            or "Dieser Executor unterstützt keinen automatischen Teleport-Neustart" })
+        return tab
+    end
+    function controller.start()
+        bindRemotes()
+        controller.worker = task.spawn(function()
+            while running() do
+                local ok, message = xpcall(controller.step, function(reason) return debug.traceback(tostring(reason), 2) end)
+                if not ok and running() then
+                    controller.cancel()
+                    report("Run-Automatik wartet · Details in der Konsole")
+                    warn("[ForestControl Runs] " .. tostring(message))
+                    task.wait(3)
+                end
+                task.wait(0.25)
+            end
+        end)
+    end
+    bindRemotes()
+    return controller
+end
+
 local function createConfigManager(window)
     local HttpService = game:GetService("HttpService")
     local META_FILE = "ForestControl/ConfigLoader.json"
@@ -1630,7 +2329,8 @@ local function createConfigManager(window)
     local function syncSettings()
         for key, value in pairs(config) do
             local handle = state.controls[key]
-            if handle then handle:Set(type(value) == "number" and format(value) or value, true) end
+            local display = state.runController and state.runController.displaySetting(key, value) or value
+            if handle then handle:Set(type(display) == "number" and format(display) or display, true) end
         end
         syncSellCapacityUI()
     end
@@ -1649,6 +2349,7 @@ local function createConfigManager(window)
         state.setAutoSell(values.SellEnabled == true)
     end
     local function pause()
+        if state.runController then state.runController.cancel() end
         state.cancelSell("Configwechsel · zurückgekehrt")
         state.setEnabled(false)
         state.setAutoCollect(false)
@@ -1663,6 +2364,9 @@ local function createConfigManager(window)
         for key, raw in pairs(values) do
             if type(candidate[key]) == "boolean" then
                 assert(type(raw) == "boolean", "Ungültiger Schalter: " .. key)
+                candidate[key] = raw
+            elseif type(candidate[key]) == "string" then
+                assert(state.runController and state.runController.validateSetting(key, raw), "Ungültige Run-Auswahl: " .. key)
                 candidate[key] = raw
             else
                 local descriptor = descriptorByKey[key]
@@ -1833,12 +2537,14 @@ local ok, err = pcall(function()
         return
     end
     state.window = window
+    local runController = createRunAutomation()
 
     local farm = window:CreateTab({ name = "Farm" })
     local movement = window:CreateTab({ name = "Bewegung" })
     local chopping = window:CreateTab({ name = "Abbau" })
     local collection = window:CreateTab({ name = "Sammeln" })
     local selling = window:CreateTab({ name = "Verkaufen" })
+    runController.createTab(window)
     createPlayerTab(window)
     local tabs = { Movement = movement, Chopping = chopping, Collection = collection, Selling = selling }
 
@@ -5051,6 +5757,7 @@ end
 
 function state.requestSell(mode)
     if not isAlive() then return false, "Script beendet" end
+    if not isRunTransitionIdle() then return false, "Eine Run-/Event-Interaktion läuft oder der Run ist nicht aktiv" end
     if state.sellBusy then return false, "Ein Verkauf läuft bereits" end
     local count = player:GetAttribute("CarriedLogs")
     if type(count) ~= "number" or count < 1 then return false, "Kein Holz im Inventar" end
@@ -5098,7 +5805,7 @@ local logSettings
 local logSettingsModule
 
 local function collectionAllowed()
-    return isAlive() and state.collectEnabled and not state.sellBusy and not state.configLoading
+    return isAlive() and state.collectEnabled and not state.sellBusy and isRunTransitionIdle() and not state.configLoading
 end
 
 local function isLogAreaAllowed(log)
@@ -5382,7 +6089,7 @@ end)
 
 state.sellWorker = task.spawn(function()
     while isAlive() do
-        if state.sellEnabled and not state.sellBusy and not state.bossBusy and not state.configLoading
+        if state.sellEnabled and not state.sellBusy and not state.bossBusy and isRunTransitionIdle() and not state.configLoading
             and not (state.abilityController and state.abilityController.isFlying()) and os.clock() >= nextAutoSellAt then
             local checked, message = xpcall(function()
                 local rules = resolveSellRules()
@@ -5476,4 +6183,8 @@ state.worker = task.spawn(function()
 end)
 
 if state.configManager then state.configManager.start() end
+if state.runController then
+    state.runController.restore(teleportState)
+    state.runController.start()
+end
 print("[ForestControl Gen2] Bereit · alte Instanz vollständig beendet · native Configs mit Auto-Load verfügbar.")
