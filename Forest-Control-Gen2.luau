@@ -1468,9 +1468,9 @@ local function createPlayerTab(window)
         text = "Ohne geladene Config starten Funktionen ausgeschaltet und Keybinds unbelegt. Taste anklicken und belegen; Backspace löscht die Belegung. Noclip aus = Clip.",
     })
     local features = {
-        { key = "Fly", name = "Fly", speed = "FlySpeed", hint = "WASD folgt der Kamera · Leertaste hoch · linke Strg runter. Pausiert den Autofarm." },
-        { key = "WalkSpeed", name = "Walkspeed", speed = "WalkSpeed", hint = "Eigenen Laufwert einschalten; beim Ausschalten gilt wieder der Spielwert." },
-        { key = "Noclip", name = "Noclip / Clip", hint = "Ein: durch Hindernisse bewegen. Aus: ursprüngliche Kollision der Charakterteile wiederherstellen." },
+        { key = "Fly", name = "Fly", keybind = true, speed = "FlySpeed", hint = "WASD folgt der Kamera · Leertaste hoch · linke Strg runter. Pausiert den Autofarm." },
+        { key = "WalkSpeed", name = "Walkspeed", keybind = true, speed = "WalkSpeed", hint = "Eigenen Laufwert einschalten; beim Ausschalten gilt wieder der Spielwert." },
+        { key = "Noclip", name = "Noclip / Clip", keybind = true, hint = "Ein: durch Hindernisse bewegen. Aus: ursprüngliche Kollision der Charakterteile wiederherstellen." },
         { key = "NoRecoil", name = "No Recoil", hint = "Entfernt den lokalen Waffenrückstoß bei Pistole, AK und Minigun." },
         { key = "NoSpread", name = "No Spread", hint = "Entfernt die lokale Geschossstreuung bei Pistole, AK und Minigun." },
         { key = "SilentAim", name = "Silent Aim", hint = "Lenkt manuelle Schüsse auf sichtbare kleine Monster und Bosse nächst am Fadenkreuz. Beachtet Reichweite und Hindernisse; bewegt die Kamera nicht." },
@@ -1491,15 +1491,17 @@ local function createPlayerTab(window)
                 callback = function(value) commit(field, value) end,
             })
         end
-        state.controls[key .. "Keybind"] = tab:CreateKeybind({
-            name = feature.name .. " · Keybind", value = Enum.KeyCode.Unknown,
-            flag = "PlayerKeybind_" .. key, hold = false,
-            callback = function()
-                if controller.alive and isAlive() and not state.configLoading and not UserInputService:GetFocusedTextBox() then
-                    controller.set(key, not controller.enabled[key])
-                end
-            end,
-        })
+        if feature.keybind then
+            state.controls[key .. "Keybind"] = tab:CreateKeybind({
+                name = feature.name .. " · Keybind", value = Enum.KeyCode.Unknown,
+                flag = "PlayerKeybind_" .. key, hold = false,
+                callback = function()
+                    if controller.alive and isAlive() and not state.configLoading and not UserInputService:GetFocusedTextBox() then
+                        controller.set(key, not controller.enabled[key])
+                    end
+                end,
+            })
+        end
     end
     state.controls.GunAssistStatus = tab:CreateText({ name = "Schusshilfen", text = "Schusshilfen ausgeschaltet" })
     table.insert(controller.connections, UserInputService.WindowFocusReleased:Connect(function()
@@ -1619,7 +1621,7 @@ local function createConfigManager(window)
     end
     local function snapshot()
         local binds = {}
-        for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip", "NoRecoil", "NoSpread", "SilentAim" }) do binds[key] = state.controls[key .. "Keybind"].value end
+        for _, key in ipairs({ "Fly", "WalkSpeed", "Noclip" }) do binds[key] = state.controls[key .. "Keybind"].value end
         return {
             settings = table.clone(config), modes = modes(), binds = binds,
             theme = state.themeStudio and state.themeStudio.exportJSON() or nil,
