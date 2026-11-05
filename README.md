@@ -40,3 +40,5 @@ Beide Schalter werden in Configs gespeichert und bei Teleports übernommen. Die 
 ## Feste Automatikwerte
 
 Der Basisabstand zum Baum beträgt 2 Studs. Fehlgeschlagene Baumversuche werden nach 5 Sekunden erneut freigegeben; fehlgeschlagene Holz-Sammelversuche nach 2 Sekunden. Diese Werte und der automatische Teleport-Neustart sind fest in der jeweiligen Automatik eingebaut und werden durch alte Config-Einträge nicht verändert. Die Schlagzeiten richten sich nach dem Werkzeug; einen zusätzlichen manuellen Mindestabstand gibt es nicht mehr. Run-, Sammel- und Schusshilfen-Statusanzeigen wurden aus der Oberfläche entfernt.
+
+Bei Axt und Kettensäge führt ein einzelner unbestätigter Treffer nicht sofort zum nächsten Baum: Nach dem nativen Werkzeugtakt sind bis zu zwei weitere Versuche am selben Baum erlaubt. Bestätigte Treffer behalten das schnelle 0,13-Sekunden-Bestätigungsfenster. Erst nach drei aufeinanderfolgenden unbestätigten Treffern greift der normale spätere Baum-Anlauf. Ausschalten, Gebietsgrenzen, Mitspieler und Sägehitze werden weiterhin berücksichtigt.
