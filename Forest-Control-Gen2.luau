@@ -2958,6 +2958,7 @@ local ok, err = pcall(function()
     state.setAutoSell(false)
     createThemeStudio(window)
     createConfigManager(window)
+    farm:Select(true)
 end)
 
 if not ok then
