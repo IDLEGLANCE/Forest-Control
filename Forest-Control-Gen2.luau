@@ -1707,7 +1707,7 @@ for attempt = 1, 3 do
     if ok then return end
     if attempt == 3 then warn("[ForestControl Teleport] " .. tostring(message)) else task.wait(2) end
 end
-]=], payload)
+        ]=], payload)
         local accepted, message = pcall(queue, loader)
         controller.queued = accepted
         controller.everQueued = controller.everQueued or accepted
