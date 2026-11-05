@@ -100,9 +100,9 @@ local config = {
     AutoHoard = false,
     AutoFinishRun = false,
     AutoRepeatRun = false,
-    RunDestination = "WarGod",
-    RunDifficulty = "NORMAL",
-    RunPeaceful = false,
+    RunDestination = type(workspace:GetAttribute("RunMap")) == "string" and workspace:GetAttribute("RunMap") or "Forest",
+    RunDifficulty = type(workspace:GetAttribute("RunDifficulty")) == "string" and workspace:GetAttribute("RunDifficulty") or "NORMAL",
+    RunPeaceful = workspace:GetAttribute("RunPeaceful") == true,
 }
 if previousConfig then
     for key, default in pairs(config) do
