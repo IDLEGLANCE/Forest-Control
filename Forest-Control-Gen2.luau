@@ -78,6 +78,26 @@ local state = {
 }
 environment[KEY] = state
 
+local maxLogCollectRadius = 14.75
+do
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local configs = shared and shared:FindFirstChild("Configs")
+    local module = configs and configs:FindFirstChild("Chopping")
+    if module then
+        local loaded, settings = pcall(require, module)
+        local range = loaded and type(settings) == "table" and type(settings.Logs) == "table"
+            and tonumber(settings.Logs.ServerPickupRange)
+        if type(range) == "number" and range == range and range < math.huge and range > 0.35 then
+            maxLogCollectRadius = range - 0.25
+        end
+    end
+end
+
+local function clampLogCollectRadius(value)
+    if type(value) ~= "number" or value ~= value then return math.min(12, maxLogCollectRadius) end
+    return math.clamp(value, 0.1, maxLogCollectRadius)
+end
+
 local config = {
     Speed = 38,
     MaxChopDistance = 2.5,
@@ -113,6 +133,7 @@ if previousConfig then
     end
 end
 config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
+config.CollectRadius = clampLogCollectRadius(config.CollectRadius)
 state.config = config
 
 local status
@@ -324,7 +345,7 @@ local descriptors = {
     { Key = "MinTweenTime", Name = "Minimale Tween-Zeit", Description = "Untere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
     { Key = "MaxTweenTime", Name = "Maximale Tween-Zeit", Description = "Obere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
     { Key = "MaxChopDistance", Name = "Maximale Schlagdistanz", Description = "Vor jedem Schlag geprüfter Abstand in Studs.", Min = 0.1, Tab = "Chopping" },
-    { Key = "CollectRadius", Name = "Sammelradius", Description = "Radius für den ersten Stamm; auf die Spielreichweite begrenzt. Grasp erfasst Nachbarstämme automatisch.", Min = 0.1, Tab = "Collection" },
+    { Key = "CollectRadius", Name = "Sammelradius", Description = string.format("Radius für den ersten Stamm; maximal %.6g Studs mit kleinem Puffer zur Servergrenze. Grasp erfasst Nachbarstämme automatisch.", maxLogCollectRadius), Min = 0.1, Max = maxLogCollectRadius, Tab = "Collection" },
     { Key = "CurrencyCollectRadius", Name = "Gems/Shards-Sammelradius", Description = "Radius in Studs, maximal 16 wie beim normalen Anklicken; mit kleinem Abstand zur Reichweitengrenze.", Min = 0.1, Max = 16, Tab = "Collection" },
     { Key = "CollectInterval", Name = "Sammelabstand", Description = "Sekunden zwischen Anfragen; mindestens 0,12.", Min = 0.12, Tab = "Collection" },
 }
@@ -2429,6 +2450,7 @@ end
             if type(value) == type(config[key]) and (type(value) ~= "string" or controller.validateSetting(key, value)) then config[key] = value end
         end
         config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
+        config.CollectRadius = clampLogCollectRadius(config.CollectRadius)
         for key, value in pairs(config) do
             local control = state.controls[key]
             if control then
@@ -2672,6 +2694,7 @@ local function createConfigManager(window)
                 assert(descriptor, "Unbekannte Einstellung: " .. tostring(key))
                 local value = tonumber((tostring(raw):gsub(",", ".")))
                 assert(value and value == value and math.abs(value) < math.huge, "Ungültige Zahl: " .. key)
+                if key == "CollectRadius" then value = clampLogCollectRadius(value) end
                 assert(value >= descriptor.Min and (not descriptor.Max or value <= descriptor.Max), "Wert außerhalb des Bereichs: " .. key)
                 assert(not descriptor.Integer or value % 1 == 0, "Ganze Zahl nötig: " .. key)
                 candidate[key] = value
