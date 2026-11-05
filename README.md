@@ -20,7 +20,7 @@ Die Oberfläche und die bisherigen Funktionen bleiben erhalten. Lokale Benutzerk
 
 ## Runs und Weltwechsel
 
-Im Tab **Runs & Event** lädt **Nach Weltwechsel automatisch starten** das Script nach Teleports erneut. Aktuelle Einstellungen, aktive Schalter, Theme und die Bewegungs-Keybinds werden übernommen. Der Executor muss die Teleport-Queue unterstützen; der Status im Tab zeigt die Verfügbarkeit.
+Nach Teleports lädt das Script automatisch erneut. Diese Funktion ist fest aktiviert. Aktuelle Einstellungen, aktive Schalter, Theme und die Bewegungs-Keybinds werden übernommen. Der Executor muss die Teleport-Queue unterstützen.
 
 - **Raben automatisch einsammeln:** besucht fehlende Raben in freigeschalteten Areas und wartet auf die vom Spiel bestätigte Fundliste.
 - **Säulenrätsel automatisch lösen:** startet ab mindestens 90 % geräumter Area 6 und dreht die Säulen anhand der replizierten Zielsymbole. Die Kiste gilt erst bei bestätigtem `Open` als geöffnet.
@@ -36,3 +36,7 @@ Der Tab **Upgrades** verbessert bei eingeschalteter Automatik vorhandene Axt, Ke
 **Axt und Kettensäge automatisch kaufen** ergänzt fehlende Standardwerkzeuge, sobald sie bezahlbar sind und ein freigeschalteter Stand verfügbar ist. Eine vorhandene oder permanente Kettensäge wird nicht erneut gekauft; die Axt bleibt als Ersatz für den bestehenden 85-%-Hitzewechsel vorgesehen. Bei erkannten Klassenwaffen wie War-God-Axt, Hellchain oder Katana entfallen beide Standardkäufe. Normale Werkzeug-Upgrades werden weiterhin für bereits vorhandene Werkzeuge durchgeführt. Die Kaufbewegung pausiert Farm, Sammeln und Verkauf und kehrt anschließend zur Ausgangsposition zurück.
 
 Beide Schalter werden in Configs gespeichert und bei Teleports übernommen. Die Upgrade-Automatik startet standardmäßig ausgeschaltet; der Werkzeugkauf-Schalter wirkt nur bei aktiver Upgrade-Automatik.
+
+## Feste Automatikwerte
+
+Der Basisabstand zum Baum beträgt 2 Studs. Fehlgeschlagene Baumversuche werden nach 5 Sekunden erneut freigegeben; fehlgeschlagene Holz-Sammelversuche nach 2 Sekunden. Diese Werte und der automatische Teleport-Neustart sind fest in der jeweiligen Automatik eingebaut und werden durch alte Config-Einträge nicht verändert. Die Schlagzeiten richten sich nach dem Werkzeug; einen zusätzlichen manuellen Mindestabstand gibt es nicht mehr. Run-, Sammel- und Schusshilfen-Statusanzeigen wurden aus der Oberfläche entfernt.
