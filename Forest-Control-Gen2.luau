@@ -8,6 +8,9 @@ local POST_HIT_RECOVERY_FACTOR = 0.92
 local HELLCHAIN_RECOVERY_FACTOR = POST_HIT_RECOVERY_FACTOR * 0.92
 local SAW_SWAP_HEAT = 0.85
 local SAW_RETURN_HEAT = 0.25
+local TREE_DISTANCE = 2
+local TREE_RETRY_AFTER = 5
+local LOG_RETRY_AFTER = 2
 
 local environment = getgenv and getgenv() or _G
 local KEY = "__BambooTweenFarm"
@@ -77,15 +80,11 @@ environment[KEY] = state
 
 local config = {
     Speed = 38,
-    Distance = 2,
     MaxChopDistance = 2.5,
     MinTweenTime = 0.08,
     MaxTweenTime = 30,
-    RetryAfter = 5,
-    HitInterval = 0,
     CollectRadius = 12,
     CollectInterval = 0.15,
-    CollectRetryAfter = 2,
     CollectLogs = true,
     CollectGems = true,
     CollectShards = true,
@@ -98,7 +97,6 @@ local config = {
     AutoBoss = false,
     AutoUpgrade = false,
     AutoBuyFarmTools = true,
-    ResumeOnTeleport = true,
     AutoRavens = false,
     AutoHoard = false,
     AutoFinishRun = false,
@@ -114,15 +112,12 @@ if previousConfig then
         end
     end
 end
--- Alte Laufzeitwerte/Configs dürfen die gewünschte Wiederholungsgrenze nicht erhöhen.
-config.RetryAfter = math.clamp(config.RetryAfter, 0, 5)
+config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
 state.config = config
 
 local status
-local collectStatus
 local sellStatus
 local lastSellStatus
-local lastCollectStatus
 local lastStatus
 local syncing = false
 
@@ -162,13 +157,6 @@ local function setStatus(text)
     if isAlive() and status and text ~= lastStatus then
         lastStatus = text
         status:Set(text)
-    end
-end
-
-local function setCollectStatus(text)
-    if isAlive() and collectStatus and text ~= lastCollectStatus then
-        lastCollectStatus = text
-        collectStatus:Set(text)
     end
 end
 
@@ -215,7 +203,6 @@ function state.setAutoCollect(enabled)
             warn("[ForestControl Collect UI] " .. tostring(updateError))
         end
     end
-    setCollectStatus(state.collectEnabled and "Suche ausgewählte Drops in der Nähe …" or "Ausgeschaltet")
 end
 
 function state.setEnabled(enabled)
@@ -334,16 +321,12 @@ local descriptors = {
     { Key = "FlySpeed", Name = "Flyspeed", Description = "Fluggeschwindigkeit in Studs pro Sekunde.", Min = 1, Max = 500, Tab = "Player" },
     { Key = "WalkSpeed", Name = "Walkspeed", Description = "Laufgeschwindigkeit bei aktiviertem Walkspeed-Toggle.", Min = 0, Max = 500, Tab = "Player" },
     { Key = "Speed", Name = "Tween-Speed", Description = "Bewegung in Studs pro Sekunde.", Min = 0.1, Tab = "Movement" },
-    { Key = "Distance", Name = "Abstand zum Baum", Description = "Zielabstand in Studs.", Min = 0.1, Tab = "Movement" },
     { Key = "MinTweenTime", Name = "Minimale Tween-Zeit", Description = "Untere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
     { Key = "MaxTweenTime", Name = "Maximale Tween-Zeit", Description = "Obere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
     { Key = "MaxChopDistance", Name = "Maximale Schlagdistanz", Description = "Vor jedem Schlag geprüfter Abstand in Studs.", Min = 0.1, Tab = "Chopping" },
-    { Key = "HitInterval", Name = "Zusätzlicher Mindestabstand", Description = "Sekunden zwischen Schlagstarts. Axt und HellChain berücksichtigen zusätzlich ihre echten Animationen und Upgrades.", Min = 0, Tab = "Chopping" },
-    { Key = "RetryAfter", Name = "Erneut besuchen nach", Description = "Höchstens 5 Sekunden pro Baum. Unbestätigte automatische Treffer werden spätestens nach 2 Sekunden erneut versucht.", Min = 0, Max = 5, Tab = "Chopping" },
     { Key = "CollectRadius", Name = "Sammelradius", Description = "Radius für den ersten Stamm; auf die Spielreichweite begrenzt. Grasp erfasst Nachbarstämme automatisch.", Min = 0.1, Tab = "Collection" },
     { Key = "CurrencyCollectRadius", Name = "Gems/Shards-Sammelradius", Description = "Radius in Studs, maximal 16 wie beim normalen Anklicken; mit kleinem Abstand zur Reichweitengrenze.", Min = 0.1, Max = 16, Tab = "Collection" },
     { Key = "CollectInterval", Name = "Sammelabstand", Description = "Sekunden zwischen Anfragen; mindestens 0,12.", Min = 0.12, Tab = "Collection" },
-    { Key = "CollectRetryAfter", Name = "Holz erneut versuchen nach", Description = "Sekunden bis zum erneuten Versuch am selben Log.", Min = 0.2, Tab = "Collection" },
 }
 local descriptorByKey = {}
 for _, descriptor in ipairs(descriptors) do
@@ -385,10 +368,7 @@ function state.applySetting(key, text)
     if key == "MaxTweenTime" and value < config.MinTweenTime then
         return false, "Maximale Zeit darf minimale Zeit nicht unterschreiten"
     end
-    if key == "Distance" and value > config.MaxChopDistance then
-        return false, "Abstand darf Schlagdistanz nicht übersteigen"
-    end
-    if key == "MaxChopDistance" and value < config.Distance then
+    if key == "MaxChopDistance" and value < TREE_DISTANCE then
         return false, "Schlagdistanz muss mindestens Abstand sein"
     end
     config[key] = value
@@ -1033,8 +1013,6 @@ local function createGunAssist(getFlags)
     local function report(text)
         if manager.status == text then return end
         manager.status = text
-        local control = state.controls.GunAssistStatus
-        if control and isAlive() then control:Set(text) end
     end
     local function current(fn, index)
         return inspect(fn)[index]
@@ -1526,7 +1504,6 @@ local function createPlayerTab(window)
             })
         end
     end
-    state.controls.GunAssistStatus = tab:CreateText({ name = "Schusshilfen", text = "Schusshilfen ausgeschaltet" })
     table.insert(controller.connections, UserInputService.WindowFocusReleased:Connect(function()
         controller.focused = false
         if controller.flight then controller.flight.velocity.VectorVelocity = Vector3.zero end
@@ -1894,8 +1871,6 @@ local function createRunAutomation()
     local function report(message)
         if controller.status == message then return end
         controller.status = message
-        local control = state.controls.RunStatus
-        if control and running() then control:Set(message) end
     end
     local function moduleAt(parent, name)
         local object = parent and parent:FindFirstChild(name)
@@ -1973,10 +1948,6 @@ local function createRunAutomation()
             controller.departing, controller.returning = false, false
             controller.returnAttempts = 0
         end
-        if key == "ResumeOnTeleport" and config.ResumeOnTeleport ~= true and controller.queued then
-            writeTeleportRecord({ version = 1, gameId = game.GameId, expires = os.time() + 900,
-                token = controller.teleportToken, cancelled = true })
-        end
     end
     function controller.destroy()
         if controller.everQueued then
@@ -2003,7 +1974,7 @@ local function createRunAutomation()
             theme = state.themeStudio and state.themeStudio.exportJSON() or nil }
     end
     function controller.prepareTeleport()
-        if not running() or not config.ResumeOnTeleport then return false end
+        if not running() then return false end
         if not controller.queueAvailable then report("Weltwechsel: Executor unterstützt keinen Teleport-Neustart"); return false end
         local record = capture()
         writeTeleportRecord(record)
@@ -2292,8 +2263,8 @@ end
         return true
     end
     local function returnToLobby(chop, places, eventComplete)
-        if not controller.queueAvailable or not config.ResumeOnTeleport then
-            report("Auto-Run benötigt aktivierten Teleport-Neustart und Executor-Unterstützung"); return
+        if not controller.queueAvailable then
+            report("Auto-Run benötigt Executor-Unterstützung für Teleport-Neustarts"); return
         end
         if controller.returning then report("Run beendet · Rückkehr zur Lobby läuft"); return end
         if controller.returnAttempts >= 3 then report("Lobby-Teleport nicht bestätigt · Wiederholung aus- und einschalten für neuen Versuch"); return end
@@ -2349,8 +2320,8 @@ end
     end
     local function launchRun(data, remotes)
         if os.clock() < controller.nextLaunch or os.clock() < controller.launchingUntil then return end
-        if not controller.queueAvailable or not config.ResumeOnTeleport then
-            report("Auto-Run benötigt aktivierten Teleport-Neustart und Executor-Unterstützung"); return
+        if not controller.queueAvailable then
+            report("Auto-Run benötigt Executor-Unterstützung für Teleport-Neustarts"); return
         end
         if player:GetAttribute("Loaded") ~= true or not data.catalog then report("Lobby · warte auf Spielerdaten"); return end
         local selected, difficulty
@@ -2457,7 +2428,7 @@ end
         for key, value in pairs(payload.settings or {}) do
             if type(value) == type(config[key]) and (type(value) ~= "string" or controller.validateSetting(key, value)) then config[key] = value end
         end
-        config.RetryAfter = math.clamp(config.RetryAfter, 0, 5)
+        config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
         for key, value in pairs(config) do
             local control = state.controls[key]
             if control then
@@ -2486,12 +2457,6 @@ end
     end
     function controller.createTab(window)
         local tab = window:CreateTab({ name = "Runs & Event" })
-        state.controls.ResumeOnTeleport = tab:CreateToggle({
-            name = "Nach Weltwechsel automatisch starten", value = config.ResumeOnTeleport,
-            flag = "Setting_ResumeOnTeleport",
-            description = "Lädt Forest Control nach Teleports erneut und übernimmt aktuelle Einstellungen und Schalter. Benötigt Teleport-Queue-Unterstützung des Executors.",
-            callback = function(value) commitBoolean("ResumeOnTeleport", value) end,
-        })
         tab:CreateSection({ name = "Frozen Wilds · Shards" })
         for _, feature in ipairs({
             { key = "AutoRavens", name = "Raben automatisch einsammeln", hint = "Besucht noch fehlende Raben in freigeschalteten Areas und wartet auf die bestätigte RavensFound-Liste. Unabhängig vom Autofarm." },
@@ -2535,9 +2500,6 @@ end
             description = "Chapter: nach RunEnded zur Lobby. Frozen Wilds: sobald alle 12 Raben und die Kiste bestätigt sind. Danach neuen Solo-Run starten; aktuelle Farm-/Sammel-/Boss-Schalter werden übernommen.",
             callback = function(value) commitBoolean("AutoRepeatRun", value) end,
         })
-        state.controls.RunStatus = tab:CreateText({ name = "Run-Status", text = controller.queueAvailable
-            and "Teleport-Neustart verfügbar · Run- und Event-Automatik ausgeschaltet"
-            or "Dieser Executor unterstützt keinen automatischen Teleport-Neustart" })
         return tab
     end
     function controller.start()
@@ -2710,14 +2672,13 @@ local function createConfigManager(window)
                 assert(descriptor, "Unbekannte Einstellung: " .. tostring(key))
                 local value = tonumber((tostring(raw):gsub(",", ".")))
                 assert(value and value == value and math.abs(value) < math.huge, "Ungültige Zahl: " .. key)
-                if key == "RetryAfter" then value = math.min(value, 5) end
                 assert(value >= descriptor.Min and (not descriptor.Max or value <= descriptor.Max), "Wert außerhalb des Bereichs: " .. key)
                 assert(not descriptor.Integer or value % 1 == 0, "Ganze Zahl nötig: " .. key)
                 candidate[key] = value
             end
         end
         assert(candidate.MinTweenTime <= candidate.MaxTweenTime, "Minimale Tween-Zeit übersteigt die maximale")
-        assert(candidate.Distance <= candidate.MaxChopDistance, "Baumabstand übersteigt die Schlagdistanz")
+        candidate.MaxChopDistance = math.max(TREE_DISTANCE, candidate.MaxChopDistance)
         return candidate
     end
     function manager.save(name)
@@ -2961,7 +2922,6 @@ local ok, err = pcall(function()
             if not syncing and isAlive() then state.setAutoCollect(value) end
         end,
     })
-    collectStatus = collection:CreateText({ name = "Sammelstatus", text = "Ausgeschaltet" })
     for _, item in ipairs({
         { key = "CollectLogs", name = "Holz einsammeln" },
         { key = "CollectGems", name = "Gems einsammeln" },
@@ -3050,7 +3010,7 @@ end
 local function confirmedRecovery(startedAt, profile)
     local now = os.clock()
     local before = math.max(0, combat.nextStart - now)
-    local minimum = startedAt + math.max(profile.minInterval or 0, config.HitInterval)
+    local minimum = startedAt + (profile.minInterval or 0)
     local factor = profile.tool == "HellChain" and HELLCHAIN_RECOVERY_FACTOR or POST_HIT_RECOVERY_FACTOR
     combat.nextStart = math.max(now, minimum, now + before * factor)
     return before, math.max(0, combat.nextStart - now)
@@ -3251,7 +3211,7 @@ local function axeProfile(tree, preview)
         minInterval = (tool.Interval or timing.MinInterval or 0) * scale,
         windup = (timing.Windup + timing.Strike) * scale,
         cycle = math.max((timing.Windup + timing.Strike + timing.Recover * timing.ChainAt) * scale
-            + timing.HitStop, (tool.Interval or timing.MinInterval or 0) * scale, config.HitInterval),
+            + timing.HitStop, (tool.Interval or timing.MinInterval or 0) * scale),
         settle = math.clamp(0.08 * scale, 0.05, 0.08), reach = reach,
     }
 end
@@ -3277,7 +3237,7 @@ local function fistsProfile(tree, preview)
         windup = (timing.Windup + timing.Strike) * scale,
         recover = timing.Recover * timing.ChainAt * scale,
         cycle = math.max((timing.Windup + timing.Strike + timing.Recover * timing.ChainAt) * scale
-            + combat.settings.Axe.HitStop, tool.Interval or 0, config.HitInterval),
+            + combat.settings.Axe.HitStop, tool.Interval or 0),
         settle = math.clamp(0.08 * scale, 0.05, 0.08),
         reach = math.min(tool.Reach, tool.ServerReach or tool.Reach),
         hold = api.Holds(player, "Fists"),
@@ -3327,7 +3287,7 @@ local function sawProfile(tree)
     return {
         tool = "Chainsaw", label = "Kettensäge", damage = damage, side = 1,
         -- Genau der native Sägetakt. Speed steckt bereits in UpgradeMath.Damage.
-        cycle = math.max(tool.Interval * 1.02, config.HitInterval),
+        cycle = tool.Interval * 1.02,
         engage = tonumber(tool.Engage) or 0.15, windup = 0, settle = 0.05,
         reach = math.min(tool.Reach, tool.ServerReach or tool.Reach),
         heat = heatState.heat, locked = heatState.locked, coolRemaining = heatState.coolRemaining,
@@ -3391,7 +3351,7 @@ local function combatProfile(tree, preview)
         tool = "HellChain",
         damage = damage, level = level,
         minInterval = tonumber(tool.Interval) or 0,
-        cycle = math.max(nativeCycle * timingFactor, tonumber(tool.Interval) or 0, config.HitInterval),
+        cycle = math.max(nativeCycle * timingFactor, tonumber(tool.Interval) or 0),
         windup = nativeWindup * timingFactor,
         settle = math.clamp(0.08 * scale, 0.05, 0.08),
         timingFactor = timingFactor, nativeCycle = nativeCycle, nativeWindup = nativeWindup,
@@ -3531,7 +3491,7 @@ local function genericProfile(tree, name)
         return nil -- Sammelgeräte ohne Baumangriff sind keine Farmwaffen.
     end
     if not positive(damage) or not positive(reach) or not positive(cycle) then return nil end
-    cycle = math.max(cycle, spec.Interval or 0, config.HitInterval)
+    cycle = math.max(cycle, spec.Interval or 0)
     local heatSpec = spec.Heat and api.Heat(player, name)
     local heat, heatLocked = 0, false
     if heatSpec and combat.axe.effects then
@@ -4310,9 +4270,8 @@ end
 local function retryTree(tree, recovery, reason)
     recovery.failures = recovery.failures + 1
     recovery.reason = reason
-    local delay = math.min(2, math.max(0.25, config.RetryAfter), 0.5 * recovery.failures)
-    skippedUntil[tree] = os.clock() + delay
-    setStatus(reason .. " · neuer Anlauf in " .. string.format("%.1f", delay) .. " s")
+    skippedUntil[tree] = os.clock() + TREE_RETRY_AFTER
+    setStatus(reason .. " · neuer Anlauf in " .. TREE_RETRY_AFTER .. " s")
 end
 
 local function resolveWorld()
@@ -4376,7 +4335,7 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
     end
     local maxDistance = profile and math.min(config.MaxChopDistance, profile.reach - 0.25) or config.MaxChopDistance
     if profile and profile.minimumDistance then maxDistance = profile.reach - 0.25 end
-    local clearance = config.Distance + (recovery and math.min(1, recovery.failures * 0.35) or 0)
+    local clearance = TREE_DISTANCE + (recovery and math.min(1, recovery.failures * 0.35) or 0)
     if profile and profile.minimumDistance then clearance = math.max(clearance, profile.minimumDistance) end
     local destination = position + direction * math.min(clearance, maxDistance)
     if not treeCoordinator.positionClear(destination) then
@@ -6282,7 +6241,7 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
                     and (position - anchor).Magnitude <= graspRange)
             if index == 1 and not inRange then break end
             if inRange then
-                collectRetryAt[log] = os.clock() + config.CollectRetryAfter
+                collectRetryAt[log] = os.clock() + LOG_RETRY_AFTER
                 pickup:FireServer(log)
                 sent = sent + 1
             end
@@ -6374,7 +6333,7 @@ local function collectCurrencyStep(character, root, humanoid, shared, remotes)
             and not drop:GetAttribute("CollectedBy") and isLogAreaAllowed(drop)
             and currencyReady(drop) and (currencyRetryAt[drop] or 0) <= os.clock()
             and (root.Position - drop.Position).Magnitude <= range then
-            currencyRetryAt[drop] = os.clock() + math.max(2, config.CollectRetryAfter)
+            currencyRetryAt[drop] = os.clock() + LOG_RETRY_AFTER
             remote:FireServer(drop, "Click")
             if kind == "Shards" then shards = shards + 1 else gems = gems + 1 end
         end
@@ -6389,22 +6348,15 @@ local function collectStep()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not root or not humanoid or humanoid.Health <= 0 then
-        setCollectStatus("Warte auf Charakter …")
         return
     end
     local shared = ReplicatedStorage:FindFirstChild("Shared")
     local services = shared and shared:FindFirstChild("Services")
     local remotes = services and services:FindFirstChild("ChopRemotes")
-    local messages = {}
-    local currencyMessage = collectCurrencyStep(character, root, humanoid, shared, remotes)
-    if currencyMessage then table.insert(messages, currencyMessage) end
+    collectCurrencyStep(character, root, humanoid, shared, remotes)
     -- Ein voller Holzrucksack blockiert keine Währungs-Drops.
     if config.CollectLogs and collectionAllowed() and player.Character == character then
-        local logMessage = collectLogsStep(character, root, humanoid, shared, remotes)
-        if logMessage then table.insert(messages, logMessage) end
-    end
-    if collectionAllowed() then
-        setCollectStatus(#messages > 0 and table.concat(messages, "\n") or "Keine Sammelart ausgewählt")
+        collectLogsStep(character, root, humanoid, shared, remotes)
     end
 end
 
@@ -6417,7 +6369,6 @@ state.collectWorker = task.spawn(function()
             if not ok and isAlive() then
                 warn("[ForestControl Collect] " .. tostring(err))
                 pcall(state.setAutoCollect, false)
-                pcall(setCollectStatus, "Sammelfehler · Details in der Konsole")
             end
             task.wait(math.max(config.CollectInterval, 0.12))
         else
