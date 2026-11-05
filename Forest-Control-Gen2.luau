@@ -64,7 +64,9 @@ local state = {
     abilityController = nil :: { [string]: any }?,
     treeCoordinator = nil :: { [string]: any }?,
     runController = nil :: { [string]: any }?,
+    upgradeController = nil :: { [string]: any }?,
     runBusy = false,
+    upgradeBusy = false,
     bossBusy = false,
     bossWorker = nil,
     configLoading = false,
@@ -95,6 +97,8 @@ local config = {
     AutoDetectBackpackCapacity = false,
     ChainsawToolSwitch = true,
     AutoBoss = false,
+    AutoUpgrade = false,
+    AutoBuyFarmTools = true,
     ResumeOnTeleport = true,
     AutoRavens = false,
     AutoHoard = false,
@@ -135,7 +139,7 @@ end
 
 local function isRunTransitionIdle()
     local controller = state.runController
-    return not state.runBusy and not (controller and (controller.inLobby or controller.ended or controller.departing))
+    return not state.runBusy and not state.upgradeBusy and not (controller and (controller.inLobby or controller.ended or controller.departing))
 end
 
 local function isRunning()
@@ -257,6 +261,7 @@ function state.stop()
     state.revision = state.revision + 1
     cancelMovement()
 
+    if state.upgradeController then state.upgradeController.destroy() end
     if state.runController then state.runController.destroy() end
     if state.treeCoordinator then state.treeCoordinator.destroy() end
     if state.abilityController then state.abilityController.destroy() end
@@ -428,6 +433,7 @@ local function commitBoolean(key, value)
     else
         config[key] = value
         if state.runController then state.runController.changed(key) end
+        if state.upgradeController then state.upgradeController.changed(key) end
         if key == "AutoDetectBackpackCapacity" then syncSellCapacityUI() end
         if key == "AutoBoss" then
             if value and state.playerController then state.playerController.set("Fly", false) end
@@ -1543,6 +1549,334 @@ local function createPlayerTab(window)
     return tab
 end
 
+-- Run-Münzen: vorhandene Farmwerkzeuge, Chipper und Grasp bis zu ihren echten MAX-Stufen.
+local function createUpgradeAutomation()
+    local controller = {
+        alive = true, worker = nil :: thread?, rpc = nil :: thread?, tween = nil :: Tween?,
+        pending = nil :: { [string]: any }?, epoch = 0, nextAction = 0, status = "", summary = "",
+        retries = {} :: { [string]: number }, data = nil :: { [string]: any }?,
+        stats = { upgraded = 0, bought = 0 },
+    }
+    state.upgradeController = controller
+    local function running() return controller.alive and isAlive() end
+    local function report(message, summary)
+        if controller.status ~= message then
+            controller.status = message
+            local control = state.controls.UpgradeStatus
+            if control and running() then control:Set(message) end
+        end
+        if summary and controller.summary ~= summary then
+            controller.summary = summary
+            local control = state.controls.UpgradeTargets
+            if control and running() then control:Set(summary) end
+        end
+    end
+    local function resolve()
+        if controller.data then return controller.data end
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        local configs = shared and shared:FindFirstChild("Configs")
+        local utilities = shared and shared:FindFirstChild("Utilities")
+        local services = shared and shared:FindFirstChild("Services")
+        local settings = configs and configs:FindFirstChild("Chopping")
+        local mathModule = utilities and utilities:FindFirstChild("UpgradeMath")
+        local world = configs and configs:FindFirstChild("ChapterWorld")
+        local place = utilities and utilities:FindFirstChild("PlaceMode")
+        local remotes = services and services:FindFirstChild("ChopRemotes")
+        local buy = remotes and remotes:FindFirstChild("BuyTool")
+        local upgrade = remotes and remotes:FindFirstChild("BuyUpgrade")
+        if not settings or not mathModule or not world or not place or not buy or not upgrade
+            or not buy:IsA("RemoteFunction") or not upgrade:IsA("RemoteEvent") then return nil end
+        controller.data = { settings = require(settings), math = require(mathModule), world = require(world),
+            place = require(place), buy = buy, upgrade = upgrade }
+        return controller.data
+    end
+    local function money()
+        local stats = player:FindFirstChild("leaderstats")
+        local value = stats and stats:FindFirstChild("Cash")
+        local amount = value and value.Value
+        return type(amount) == "number" and amount == amount and amount >= 0 and amount < math.huge and amount or nil
+    end
+    local function present(tool)
+        return player:GetAttribute("Owns" .. tool) == true or player:GetAttribute("OwnsForever_" .. tool) == true
+            or player:GetAttribute("Tool") == tool
+            or (tonumber(player:GetAttribute("TrialUntil_" .. tool)) or 0) > workspace:GetServerTimeNow()
+    end
+    -- Reine Planung anhand replizierter Besitz-/Levelwerte; keine optimistischen lokalen Käufe.
+    function controller.plan(data)
+        local actions, lines = {}, {}
+        local special = false
+        local class = player:GetAttribute("Class")
+        local tools = data.settings.Tools
+        for name, spec in pairs(tools) do
+            if type(name) == "string" and type(spec) == "table" and type(spec.Class) == "string"
+                and spec.Class ~= "" and (spec.Class == class or present(name)) then special = true end
+        end
+        if config.AutoBuyFarmTools and not special then
+            for index, name in ipairs({ "Axe", "Chainsaw" }) do
+                local spec = tools[name]
+                if spec and type(spec.Price) == "number" and spec.Price > 0 and not present(name)
+                    and (not spec.RequiresItem or data.math.HasItem(player, spec.RequiresItem)) then
+                    table.insert(actions, { kind = "buy", id = name, key = "buy:" .. name,
+                        name = spec.DisplayName or name, price = spec.Price, priority = index })
+                end
+            end
+        end
+        local levels, maximum = 0, 0
+        for _, section in ipairs(data.settings.Upgrades.Sections) do
+            if section.ComingSoon then continue end
+            local tool = section.Tool
+            local spec = tool and tools[tool]
+            local weapon = tool == "Axe" or tool == "Chainsaw" or type(spec) == "table" and type(spec.Class) == "string" and spec.Class ~= ""
+            if section.Requires and player:GetAttribute("Owns" .. section.Requires) ~= true then continue end
+            if weapon and player:GetAttribute("Owns" .. tool) ~= true then continue end
+            local parts = {}
+            for _, item in ipairs(section.Items or {}) do
+                if not weapon and item.Effect ~= "ChipSpeed" and item.Effect ~= "Grasp" then continue end
+                if item.ComingSoon or type(item.Prices) ~= "table" or #item.Prices == 0
+                    or item.Currency and item.Currency ~= "Coins" and item.Currency ~= "Cash"
+                    or item.RequiresItem and not data.math.HasItem(player, item.RequiresItem) then continue end
+                local level = data.math.Level(player, item.Id)
+                local max = #item.Prices
+                levels, maximum = levels + level, maximum + max
+                table.insert(parts, (item.Name or item.Id) .. " " .. level .. "/" .. max)
+                local price = item.Prices[level + 1]
+                if type(price) == "number" and price > 0 and price < math.huge then
+                    table.insert(actions, { kind = "upgrade", id = item.Id, key = "upgrade:" .. item.Id .. ":" .. level,
+                        name = (section.DisplayName or section.Id) .. " · " .. (item.Name or item.Id),
+                        price = price, from = level, maximum = max, priority = 3 })
+                end
+            end
+            if #parts > 0 then table.insert(lines, (section.DisplayName or section.Id) .. ": " .. table.concat(parts, " · ")) end
+        end
+        table.sort(actions, function(a, b)
+            if a.priority ~= b.priority then return a.priority < b.priority end
+            if a.price ~= b.price then return a.price < b.price end
+            return a.id < b.id
+        end)
+        local policy = special and "Klassenwaffe erkannt · keine Axt-/Kettensägenkäufe"
+            or not config.AutoBuyFarmTools and "Werkzeugkäufe ausgeschaltet"
+            or present("Chainsaw") and "Kettensäge vorhanden · Axt als Backup prüfen"
+            or "Fehlende Axt und Kettensäge mit Run-Münzen kaufen"
+        return actions, policy .. "\n" .. table.concat(lines, "\n"), levels, maximum
+    end
+    local function ready(data)
+        if not running() or not config.AutoUpgrade or state.configLoading or state.sellBusy or state.runBusy
+            or state.bossBusy or isGuardianFightActive() or data.place.IsLobby()
+            or player:GetAttribute("Loaded") ~= true or player:GetAttribute("InCutscene") == true
+            or player:GetAttribute("Down") == true then return false end
+        local run = state.runController
+        if run and (run.inLobby or run.ended or run.departing) then return false end
+        if state.abilityController and state.abilityController.isFlying() then return false end
+        if state.playerController and state.playerController.enabled.Fly then return false end
+        local map = workspace:FindFirstChild("Map")
+        local character = player.Character
+        local human = character and character:FindFirstChildOfClass("Humanoid")
+        return map ~= nil and map:FindFirstChild("Trees") ~= nil and human ~= nil and human.Health > 0 and not human.Sit
+    end
+    function controller.cancel()
+        controller.epoch = controller.epoch + 1
+        if controller.tween then controller.tween:Cancel(); controller.tween = nil end
+        if controller.rpc then pcall(task.cancel, controller.rpc); controller.rpc = nil end
+        controller.pending = nil
+        state.upgradeBusy = false
+    end
+    function controller.destroy()
+        controller.alive = false
+        controller.cancel()
+        if controller.worker and controller.worker ~= coroutine.running() then pcall(task.cancel, controller.worker) end
+        controller.worker = nil
+    end
+    function controller.changed(key)
+        if key == "AutoUpgrade" and not config.AutoUpgrade then controller.cancel(); report("Ausgeschaltet") end
+        if key == "AutoBuyFarmTools" and not config.AutoBuyFarmTools and state.upgradeBusy then controller.cancel() end
+    end
+    local function actionCurrent(data, action)
+        for _, candidate in ipairs((controller.plan(data))) do
+            if candidate.key == action.key and candidate.price == action.price then return true end
+        end
+        return false
+    end
+    local function stationAllowed(anchor, data)
+        local unlocked = workspace:GetAttribute("AreasUnlocked")
+        if type(unlocked) ~= "number" or unlocked < 1 then return false end
+        local node = anchor
+        while node and node ~= workspace do
+            local index = node:GetAttribute("AreaIndex")
+            if index ~= nil then return type(index) == "number" and index >= 1 and index % 1 == 0 and index <= unlocked end
+            local area = node:GetAttribute("Area")
+            if type(area) == "string" then
+                local mapped = data.world.UnlockIndexOf(area)
+                return type(mapped) == "number" and mapped >= 1 and mapped <= unlocked
+            end
+            node = node.Parent
+        end
+        local map = workspace:FindFirstChild("Map")
+        local cabin = map and map:FindFirstChild("LogCabin")
+        return cabin ~= nil and anchor:IsDescendantOf(cabin)
+    end
+    local function findStation(tool, data, position)
+        local nearest, best = nil, math.huge
+        for _, anchor in ipairs(workspace:GetDescendants()) do
+            if anchor:IsA("BasePart") and anchor.Name == "PromptAnchor" and anchor:GetAttribute("ShopItem") == tool
+                and stationAllowed(anchor, data) then
+                local prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true)
+                local range = prompt and prompt.MaxActivationDistance or 10
+                local distance = (anchor.Position - position).Magnitude
+                if distance < best then nearest, best = { anchor = anchor, range = range }, distance end
+            end
+        end
+        return nearest
+    end
+    local function fail(action, message)
+        controller.retries[action.key] = os.clock() + 8
+        report(message)
+    end
+    local function validTrip(data, job)
+        return ready(data) and controller.epoch == job.epoch and state.upgradeBusy
+            and player.Character == job.character and job.root:IsDescendantOf(job.character)
+    end
+    local function move(data, job, position, arrived)
+        if not validTrip(data, job) then return false end
+        local function reached() return arrived and arrived() or not arrived and (job.root.Position - position).Magnitude <= 1 end
+        if reached() then return true end
+        local duration = math.max(0.05, (job.root.Position - position).Magnitude / math.max(1, config.Speed))
+        local tween = TweenService:Create(job.root, TweenInfo.new(duration, Enum.EasingStyle.Linear),
+            { CFrame = CFrame.new(position) * job.root.CFrame.Rotation })
+        controller.tween = tween
+        tween:Play()
+        local deadline = os.clock() + duration + 1
+        while validTrip(data, job) and os.clock() < deadline and not reached() do task.wait(0.04) end
+        tween:Cancel()
+        if controller.tween == tween then controller.tween = nil end
+        return validTrip(data, job) and reached()
+    end
+    local function purchase(data, action)
+        local character = player.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local station = findStation(action.id, data, root.Position)
+        if not station then
+            fail(action, action.name .. " · warte auf einen freigeschalteten Verkaufsstand")
+            return
+        end
+        local job = { character = character, root = root, origin = root.Position, epoch = controller.epoch }
+        state.upgradeBusy = true
+        state.revision = state.revision + 1
+        cancelMovement()
+        if state.treeCoordinator then state.treeCoordinator.clear() end
+        if state.combat then
+            if state.combat.stopSaw then state.combat.stopSaw() end
+            if state.combat.stopNative then state.combat.stopNative() end
+        end
+        report("Kaufe " .. action.name .. " · " .. action.price .. " Münzen · zum Stand")
+        local offset = Vector3.new(root.Position.X - station.anchor.Position.X, 0, root.Position.Z - station.anchor.Position.Z)
+        offset = offset.Magnitude > 0.01 and offset.Unit or Vector3.new(1, 0, 0)
+        local destination = station.anchor.Position + offset * math.min(3, station.range / 3)
+        local arrivalDistance = math.max(1, math.min(7, station.range - 2))
+        if move(data, job, destination, function() return (root.Position - station.anchor.Position).Magnitude <= arrivalDistance end) then
+            task.wait(0.2)
+            if validTrip(data, job) and actionCurrent(data, action) and stationAllowed(station.anchor, data)
+                and (root.Position - station.anchor.Position).Magnitude <= station.range - 0.5
+                and (money() or 0) >= action.price then
+                local result = { done = false, ok = false, response = nil :: any }
+                controller.rpc = task.spawn(function()
+                    local ok, response = pcall(data.buy.InvokeServer, data.buy, action.id)
+                    result.ok, result.response, result.done = ok, response, true
+                end)
+                local deadline = os.clock() + 8
+                repeat task.wait(0.05) until not validTrip(data, job) or result.done or os.clock() >= deadline
+                if controller.rpc then pcall(task.cancel, controller.rpc); controller.rpc = nil end
+                if validTrip(data, job) then
+                    local untilAt = os.clock() + 1.5
+                    while validTrip(data, job) and player:GetAttribute("Owns" .. action.id) ~= true
+                        and result.ok and type(result.response) == "table" and result.response.Ok and os.clock() < untilAt do task.wait(0.05) end
+                    if player:GetAttribute("Owns" .. action.id) == true then
+                        controller.stats.bought = controller.stats.bought + 1
+                        report(action.name .. " gekauft · Besitz vom Server bestätigt")
+                    else
+                        local reason = type(result.response) == "table" and result.response.Why or "Keine Bestätigung"
+                        fail(action, action.name .. " nicht bestätigt · " .. tostring(reason))
+                    end
+                end
+            end
+        end
+        if validTrip(data, job) then move(data, job, job.origin) end
+        if controller.epoch == job.epoch then controller.cancel() end
+    end
+    function controller.step()
+        if not config.AutoUpgrade then report("Ausgeschaltet"); return end
+        local data = resolve()
+        if not data then report("Warte auf Kauf- und Upgrade-Daten"); return end
+        local actions, summary, levels, maximum = controller.plan(data)
+        if not ready(data) then report(data.place.IsLobby() and "Lobby · Upgrades beginnen erst im Run" or "Warte auf einen aktiven Run / freie Interaktion", summary); return end
+        local cash = money()
+        if cash == nil then report("Warte auf Run-Münzen", summary); return end
+        local pending = controller.pending
+        if pending then
+            local level = data.math.Level(player, pending.id)
+            if level > pending.from then
+                controller.stats.upgraded = controller.stats.upgraded + 1
+                controller.pending = nil
+                controller.nextAction = os.clock() + 0.12
+                report(pending.name .. " · Stufe " .. level .. "/" .. pending.maximum .. " bestätigt", summary)
+            elseif player:GetAttribute("UpgradeRefusedAt") ~= pending.refused or os.clock() >= pending.deadline then
+                controller.pending = nil
+                fail(pending, pending.name .. " nicht bestätigt · " .. tostring(player:GetAttribute("UpgradeRefusedWhy") or "neuer Versuch folgt"))
+            end
+            return
+        end
+        if os.clock() < controller.nextAction then return end
+        local selected, nextPrice
+        for _, action in ipairs(actions) do
+            nextPrice = not nextPrice and action.price or math.min(nextPrice, action.price)
+            if (controller.retries[action.key] or 0) <= os.clock() and cash >= action.price then selected = action; break end
+        end
+        if not selected then
+            report(#actions == 0 and ("Alle erkannten Ziele auf MAX · " .. levels .. "/" .. maximum)
+                or "Warte auf Münzen / Kaufmöglichkeit · " .. math.floor(cash) .. " vorhanden · nächster Preis ab " .. tostring(nextPrice), summary)
+            return
+        end
+        report(selected.name .. " · " .. selected.price .. " Münzen", summary)
+        if selected.kind == "buy" then purchase(data, selected); return end
+        -- Genau eine Stufe anfordern und erst nach der replizierten Leveländerung fortfahren.
+        selected.refused = player:GetAttribute("UpgradeRefusedAt")
+        selected.deadline = os.clock() + 2.5
+        controller.pending = selected
+        data.upgrade:FireServer(selected.id)
+    end
+    function controller.createTab(window)
+        local tab = window:CreateTab({ name = "Upgrades" })
+        state.controls.AutoUpgrade = tab:CreateToggle({
+            name = "Automatisch bis MAX upgraden", value = config.AutoUpgrade, flag = "Setting_AutoUpgrade",
+            description = "Unabhängig vom Autofarm: verbessert vorhandene Axt, Kettensäge und Klassenwaffen sowie Chipper-Speed und Grasp mit Run-Münzen bis MAX. Wartet nach jeder Stufe auf die Serverbestätigung.",
+            callback = function(value) commitBoolean("AutoUpgrade", value) end,
+        })
+        state.controls.AutoBuyFarmTools = tab:CreateToggle({
+            name = "Axt und Kettensäge automatisch kaufen", value = config.AutoBuyFarmTools, flag = "Setting_AutoBuyFarmTools",
+            description = "Nur bei aktiver Upgrade-Automatik. Erkennt vorhandene und permanente Werkzeuge. Bei eigenen Klassenwaffen entfallen beide Käufe; sonst bleibt die Axt als Backup für den bestehenden 85-%-Hitzewechsel.",
+            callback = function(value) commitBoolean("AutoBuyFarmTools", value) end,
+        })
+        state.controls.UpgradeStatus = tab:CreateText({ name = "Upgrade-Status", text = "Ausgeschaltet" })
+        state.controls.UpgradeTargets = tab:CreateText({ name = "Erkannte Ziele", text = "Werkzeuge, Preise und MAX-Stufen werden bei aktivierter Automatik aus dem Spiel gelesen." })
+        return tab
+    end
+    function controller.start()
+        controller.worker = task.spawn(function()
+            while running() do
+                local ok, message = xpcall(controller.step, function(reason) return debug.traceback(tostring(reason), 2) end)
+                if not ok and running() then
+                    controller.cancel()
+                    report("Upgrade-Automatik wartet · Details in der Konsole")
+                    warn("[ForestControl Upgrades] " .. tostring(message))
+                    task.wait(3)
+                end
+                task.wait(0.15)
+            end
+        end)
+    end
+    return controller
+end
+
 -- Weltwechsel, bestätigte Event-Interaktionen und wiederholbare Solo-Runs.
 local function createRunAutomation()
     local HttpService = game:GetService("HttpService")
@@ -1741,6 +2075,7 @@ end
                 if type(data) ~= "table" or data.Staying then return end
                 controller.ended = true
                 if data.Returning then controller.returning = true end
+                if state.upgradeController then state.upgradeController.cancel() end
                 controller.cancel()
             end)
         end
@@ -1762,7 +2097,7 @@ end
         return character, root
     end
     local function canAct()
-        return running() and not state.configLoading and not state.sellBusy and not state.bossBusy
+        return running() and not state.configLoading and not state.sellBusy and not state.bossBusy and not state.upgradeBusy
             and not isGuardianFightActive() and not controller.ended and not controller.departing
             and not (state.abilityController and state.abilityController.isFlying())
             and not (state.playerController and state.playerController.enabled.Fly)
@@ -2104,6 +2439,7 @@ end
         local wild = workspace:FindFirstChild("FrostWilds")
         if config.AutoRepeatRun and wild and data.chapter and data.chapter.Key == "WarGod"
             and (controller.departing or eventRewardsComplete(wild)) then
+            if state.upgradeController then state.upgradeController.cancel() end
             returnToLobby(chop, data.chopping.Places, true)
             return
         end
@@ -2351,6 +2687,7 @@ local function createConfigManager(window)
         state.setAutoSell(values.SellEnabled == true)
     end
     local function pause()
+        if state.upgradeController then state.upgradeController.cancel() end
         if state.runController then state.runController.cancel() end
         state.cancelSell("Configwechsel · zurückgekehrt")
         state.setEnabled(false)
@@ -2540,6 +2877,7 @@ local ok, err = pcall(function()
     end
     state.window = window
     local runController = createRunAutomation()
+    local upgradeController = createUpgradeAutomation()
 
     local farm = window:CreateTab({ name = "Farm" })
     local movement = window:CreateTab({ name = "Bewegung" })
@@ -2547,6 +2885,7 @@ local ok, err = pcall(function()
     local collection = window:CreateTab({ name = "Sammeln" })
     local selling = window:CreateTab({ name = "Verkaufen" })
     runController.createTab(window)
+    upgradeController.createTab(window)
     createPlayerTab(window)
     local tabs = { Movement = movement, Chopping = chopping, Collection = collection, Selling = selling }
 
@@ -6189,4 +6528,5 @@ if state.runController then
     state.runController.restore(teleportState)
     state.runController.start()
 end
+if state.upgradeController then state.upgradeController.start() end
 print("[ForestControl Gen2] Bereit · alte Instanz vollständig beendet · native Configs mit Auto-Load verfügbar.")
