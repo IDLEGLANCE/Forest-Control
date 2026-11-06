@@ -2505,7 +2505,10 @@ end
         cycle.runKey, cycle.peers = runKey, peers
         if cycle.phase == "rejoining" then
             local encoded = player:GetAttribute("RavensFound")
-            local ready, values = pcall(function() return type(encoded) == "string" and HttpService:JSONDecode(encoded) end)
+            local ready, values = pcall(function()
+                if encoded == nil then return {} end
+                return type(encoded) == "string" and HttpService:JSONDecode(encoded)
+            end)
             if not ready or type(values) ~= "table" or ravensComplete(wild) then
                 report("Raben-Rejoin · warte auf neuen bestätigten Raben-Sammelstand")
                 return
