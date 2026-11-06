@@ -1880,6 +1880,7 @@ end
 local function createRunAutomation()
     local HttpService = game:GetService("HttpService")
     local api = getfenv() :: any
+    local resumePath = "ForestControl/TeleportResume_" .. tostring(player.UserId) .. ".json"
     local queue = api.queue_on_teleport or api.queueonteleport
         or (type(api.syn) == "table" and api.syn.queue_on_teleport)
     local controller = {
@@ -1965,7 +1966,7 @@ local function createRunAutomation()
         if type(api.writefile) ~= "function" then return end
         pcall(function()
             if type(api.makefolder) == "function" and (type(api.isfolder) ~= "function" or not api.isfolder("ForestControl")) then api.makefolder("ForestControl") end
-            api.writefile("ForestControl/TeleportResume.json", HttpService:JSONEncode(record))
+            api.writefile(resumePath, HttpService:JSONEncode(record))
         end)
     end
     function controller.changed(key)
@@ -1994,7 +1995,7 @@ local function createRunAutomation()
     end
     function controller.destroy()
         if controller.everQueued then
-            writeTeleportRecord({ version = 1, gameId = game.GameId, expires = os.time() + 900,
+            writeTeleportRecord({ version = 1, gameId = game.GameId, ownerId = player.UserId, expires = os.time() + 900,
                 token = controller.teleportToken, cancelled = true })
         end
         controller.alive = false
@@ -2029,7 +2030,7 @@ local function createRunAutomation()
             local handle = state.controls[key .. "Keybind"]
             if handle then binds[key] = handle.value.Name end
         end
-        return { version = 1, gameId = game.GameId, expires = os.time() + 900, token = controller.teleportToken,
+        return { version = 1, gameId = game.GameId, ownerId = player.UserId, expires = os.time() + 900, token = controller.teleportToken,
             settings = table.clone(config), modes = modes, binds = binds,
             theme = state.themeStudio and state.themeStudio.exportJSON() or nil,
             ravenCycle = config.AutoRavenRejoin and validateRavenCycle(controller.ravenCycle) or nil }
@@ -2046,13 +2047,14 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 local env = getgenv and getgenv() or _G
 if env.__ForestControlTeleportBoot == game.JobId then return end
 local data = game:GetService("HttpService"):JSONDecode(%q)
+if data.ownerId and data.ownerId ~= game:GetService("Players").LocalPlayer.UserId then return end
 if type(readfile) == "function" then
     local ok, recent = pcall(function()
-        local text = readfile("ForestControl/TeleportResume.json")
+        local text = readfile(%q)
         assert(#text < 131072)
         return game:GetService("HttpService"):JSONDecode(text)
     end)
-    if ok and type(recent) == "table" and recent.version == 1 and recent.gameId == data.gameId
+    if ok and type(recent) == "table" and recent.version == 1 and recent.gameId == data.gameId and recent.ownerId == data.ownerId
         and type(recent.expires) == "number" and recent.expires >= os.time() then data = recent end
 end
 if data.cancelled then return end
@@ -2071,7 +2073,7 @@ for attempt = 1, 3 do
     if ok then return end
     if attempt == 3 then warn("[ForestControl Teleport] " .. tostring(message)) else task.wait(2) end
 end
-        ]=], payload)
+        ]=], payload, resumePath)
         local accepted, message = pcall(queue, loader)
         controller.queued = accepted
         controller.everQueued = controller.everQueued or accepted
@@ -2645,6 +2647,7 @@ end
     end
     function controller.restore(payload)
         if type(payload) ~= "table" or payload.version ~= 1 or payload.gameId ~= game.GameId
+            or payload.ownerId ~= nil and payload.ownerId ~= player.UserId
             or type(payload.expires) ~= "number" or payload.expires < os.time() then return false end
         state.configLoading = true
         for key, value in pairs(payload.settings or {}) do
