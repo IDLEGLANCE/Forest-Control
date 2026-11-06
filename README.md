@@ -23,11 +23,14 @@ Die Oberfläche und die bisherigen Funktionen bleiben erhalten. Lokale Benutzerk
 Nach Teleports lädt das Script automatisch erneut. Diese Funktion ist fest aktiviert. Aktuelle Einstellungen, aktive Schalter, Theme und die Bewegungs-Keybinds werden übernommen. Der Executor muss die Teleport-Queue unterstützen.
 
 - **Raben automatisch einsammeln:** besucht fehlende Raben in freigeschalteten Areas und wartet auf die vom Spiel bestätigte Fundliste.
+- **Raben per Rejoin wiederholen:** eigener Modus für einen laufenden Frozen-Wilds-Gruppen-Run. Sammelt nur die zwölf Raben, kehrt nach bestätigten Funden zur Lobby zurück und verwendet dort die nativen Rejoin-Aktionen `Get` und `Go`. Mindestens ein Mitspieler muss im Run bleiben. Der Modus erstellt keinen neuen Run und wartet bei einem fehlenden oder unpassenden Rejoin-Eintrag. Nach dem Beitritt wartet er auf den zurückgesetzten Raben-Sammelstand; unverändert als gesammelt gemeldete Raben lösen keine sofortige Teleport-Schleife aus.
 - **Säulenrätsel automatisch lösen:** bei freigeschalteter Area 6 priorisiert der aktive Autofarm die sechs vom Spiel markierten Bäume um Runestone 6. Nach dessen bestätigter Aktivierung (`Lit = true`) startet das Rätsel ohne prozentuale Räumungsschwelle; bis zur Kistenöffnung werden keine weiteren Bäume ausgewählt. Die Säulen richten sich nach den replizierten Zielsymbolen; die Kiste gilt erst bei bestätigtem `Open` als geöffnet. Ohne aktiven Autofarm wird der Runestone nicht automatisch freigelegt.
 - **Run automatisch abschließen:** spricht nach geräumten Chapter-Areas und beendetem Guardian-Kampf den Businessman an.
 - **Runs automatisch wiederholen:** kehrt nach dem Chapter-Abschluss zur Lobby zurück. In Frozen Wilds reichen alle zwölf bestätigten Raben und die offene Kiste; die Weltschlange ist für diese Wiederholung nicht erforderlich. In der Lobby wird ein freies Pad verwendet und ein neuer Solo-Run mit der gewählten Welt, Schwierigkeit und Friedlich-Einstellung erstellt. Gesperrte oder abgelaufene Welten werden nicht gestartet.
 
 Für wiederholtes Event-Shard-Farmen Raben, Säulenrätsel und Run-Wiederholung einschalten, die Event-Welt auswählen und den Autofarm aktivieren. Auto-Collect und Auto-Boss bleiben separat steuerbar. Die neuen Aktionen pausieren Farmbewegung und Verkauf während ihrer Interaktionen. Alle Optionen können in den nativen Sirius-Configs gespeichert werden.
+
+Für den separaten Rejoin-Modus den Gruppen-Run zuerst bis zu den gewünschten Raben freischalten und dann im Tab **Event** nur **Raben per Rejoin wiederholen** aktivieren. Während dieser Modus läuft, pausieren Farm, Bosskampf, normales Auto-Collect, Verkauf und Upgrades; ihre Schalter bleiben gespeichert. Auch die gewöhnliche Run-Wiederholung und das Säulenrätsel pausieren. Beim Ausschalten sind die vorherigen Schalter wieder wirksam. Der Rejoin-Modus und die Kennung des laufenden Runs werden bei automatischen Weltwechseln übernommen.
 
 ## Automatische Run-Upgrades
 
