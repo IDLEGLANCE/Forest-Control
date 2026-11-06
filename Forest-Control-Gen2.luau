@@ -2061,7 +2061,7 @@ env.__ForestControlTeleportBoot = game.JobId
 env.__ForestControlTeleportState = data
 for attempt = 1, 3 do
     local ok, message = pcall(function()
-        local source = game:HttpGet("https://raw.githubusercontent.com/IDLEGLANCE/Forest-Control/main/Forest-Control-Gen2.luau")
+        local source = game:HttpGet("https://raw.githubusercontent.com/IDLEGLANCE/Forest-Control/main/Forest-Control-Gen2.luau?v=" .. tostring(os.time()))
         local fn, reason = loadstring(source)
         assert(fn, reason)
         env.__ForestControlTeleportState = data
