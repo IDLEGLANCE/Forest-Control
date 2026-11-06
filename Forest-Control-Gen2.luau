@@ -2174,6 +2174,10 @@ end
         if not jobValid(job) then return false end
         local delta = position - job.root.Position
         if delta.Magnitude <= radius then return true end
+        if job.kind == "AutoRavenRejoin" then
+            job.character:MoveTo(position)
+            return jobValid(job)
+        end
         local duration = math.max(0.05, delta.Magnitude / math.max(config.Speed, 1))
         local tween = TweenService:Create(job.root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = CFrame.new(position) * job.root.CFrame.Rotation })
         controller.tween = tween
@@ -2712,7 +2716,7 @@ end
         event:CreateSection({ name = "Raben-Rejoin · Gruppen-Run" })
         state.controls.AutoRavenRejoin = event:CreateToggle({
             name = "Raben per Rejoin wiederholen", value = config.AutoRavenRejoin, flag = "Setting_AutoRavenRejoin",
-            description = "Nur Raben: nach 12 bestätigten Funden zur Lobby und über Rejoin in denselben Gruppen-Run. Ein Mitspieler muss im Run bleiben. Farm, Bosskampf, Sammeln, Verkauf und Upgrades pausieren; es wird kein neuer Run erstellt.",
+            description = "Nur Raben per Sofort-Teleport: nach 12 bestätigten Funden zur Lobby und über Rejoin in denselben Gruppen-Run. Ein Mitspieler muss im Run bleiben. Farm, Bosskampf, Sammeln, Verkauf und Upgrades pausieren; es wird kein neuer Run erstellt.",
             callback = function(value) commitBoolean("AutoRavenRejoin", value) end,
         })
         tab:CreateSection({ name = "Run-Abschluss & Wiederholung" })
