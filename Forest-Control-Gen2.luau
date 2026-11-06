@@ -57,7 +57,7 @@ local state = {
     sellWorker = nil,
     sellJob = nil,
     cancelSell = function(_reason) return false end,
-    requestSell = function(_mode) return false, "Verkaufsablauf wird initialisiert" end,
+    requestSell = function(_mode) return false, "Initializing selling" end,
     window = nil,
     controls = {} :: { [string]: any },
     themeStudio = nil :: ThemeStudioHandle?,
@@ -204,10 +204,10 @@ function state.setAutoSell(enabled)
         if not updated then warn("[ForestControl Sell UI] " .. tostring(message)) end
     end
     if not state.sellEnabled and state.sellJob and state.sellJob.mode == "auto" and state.cancelSell then
-        state.cancelSell("Auto-Sell ausgeschaltet · zurückgekehrt")
+        state.cancelSell("Auto Sell off · returned")
     end
     if not state.sellBusy then
-        setSellStatus(state.sellEnabled and "Auto-Sell bereit" or "Auto-Sell aus · manueller Verkauf bereit")
+        setSellStatus(state.sellEnabled and "Auto Sell ready" or "Auto Sell off · manual sell ready")
     end
 end
 
@@ -257,12 +257,12 @@ function state.setEnabled(enabled)
             warn("[ForestControl Farm UI] " .. tostring(updateError))
         end
     end
-    setStatus(state.enabled and "Suche nächsten Baum …" or "Pausiert · bereit zum Starten")
+    setStatus(state.enabled and "Finding the nearest tree…" or "Paused · ready to start")
 end
 
 function state.stop()
     if not state.alive then return end
-    if state.cancelSell then state.cancelSell("Beendet") end
+    if state.cancelSell then state.cancelSell("Stopped") end
     state.alive = false
     state.enabled = false
     state.collectEnabled = false
@@ -341,16 +341,16 @@ for _, child in ipairs(playerGui:GetChildren()) do
 end
 
 local descriptors = {
-    { Key = "SellThreshold", Name = "Automatisch verkaufen ab Holzmenge", Description = "Anzahl getragener Stämme. Bei kleinerem Rucksack gilt dessen maximale Kapazität.", Min = 1, Integer = true, Tab = "Selling" },
-    { Key = "FlySpeed", Name = "Flyspeed", Description = "Fluggeschwindigkeit in Studs pro Sekunde.", Min = 1, Max = 500, Tab = "Player" },
-    { Key = "WalkSpeed", Name = "Walkspeed", Description = "Laufgeschwindigkeit bei aktiviertem Walkspeed-Toggle.", Min = 0, Max = 500, Tab = "Player" },
-    { Key = "Speed", Name = "Tween-Speed", Description = "Bewegung in Studs pro Sekunde.", Min = 0.1, Tab = "Movement" },
-    { Key = "MinTweenTime", Name = "Minimale Tween-Zeit", Description = "Untere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
-    { Key = "MaxTweenTime", Name = "Maximale Tween-Zeit", Description = "Obere Dauergrenze in Sekunden.", Min = 0.01, Tab = "Movement" },
-    { Key = "MaxChopDistance", Name = "Maximale Schlagdistanz", Description = "Vor jedem Schlag geprüfter Abstand in Studs.", Min = 0.1, Tab = "Chopping" },
-    { Key = "CollectRadius", Name = "Sammelradius", Description = string.format("Radius für den ersten Stamm; maximal %.6g Studs mit kleinem Puffer zur Servergrenze. Grasp erfasst Nachbarstämme automatisch.", maxLogCollectRadius), Min = 0.1, Max = maxLogCollectRadius, Tab = "Collection" },
-    { Key = "CurrencyCollectRadius", Name = "Gems/Shards-Sammelradius", Description = "Radius in Studs, maximal 16 wie beim normalen Anklicken; mit kleinem Abstand zur Reichweitengrenze.", Min = 0.1, Max = 16, Tab = "Collection" },
-    { Key = "CollectInterval", Name = "Sammelabstand", Description = "Sekunden zwischen Anfragen; mindestens 0,12.", Min = 0.12, Tab = "Collection" },
+    { Key = "SellThreshold", Name = "Sell at Log Count", Description = "Sell at this many logs, or sooner if your backpack is full.", Min = 1, Integer = true, Tab = "Selling" },
+    { Key = "FlySpeed", Name = "Fly Speed", Description = "Flight speed in studs per second.", Min = 1, Max = 500, Tab = "Player" },
+    { Key = "WalkSpeed", Name = "Walk Speed", Description = "Movement speed while Walk Speed is enabled.", Min = 0, Max = 500, Tab = "Player" },
+    { Key = "Speed", Name = "Tween Speed", Description = "Travel speed in studs per second.", Min = 0.1, Tab = "Movement" },
+    { Key = "MinTweenTime", Name = "Minimum Tween Time", Description = "Shortest travel duration, in seconds.", Min = 0.01, Tab = "Movement" },
+    { Key = "MaxTweenTime", Name = "Maximum Tween Time", Description = "Longest travel duration, in seconds.", Min = 0.01, Tab = "Movement" },
+    { Key = "MaxChopDistance", Name = "Maximum Hit Distance", Description = "Maximum distance to a tree before attacking, in studs.", Min = 0.1, Tab = "Chopping" },
+    { Key = "CollectRadius", Name = "Log Pickup Radius", Description = string.format("First-log range, up to %.6g studs. Grasp includes nearby logs automatically.", maxLogCollectRadius), Min = 0.1, Max = maxLogCollectRadius, Tab = "Collection" },
+    { Key = "CurrencyCollectRadius", Name = "Gem & Shard Pickup Radius", Description = "Pickup range in studs, up to 16.", Min = 0.1, Max = 16, Tab = "Collection" },
+    { Key = "CollectInterval", Name = "Pickup Interval", Description = "Seconds between pickup requests. Minimum: 0.12.", Min = 0.12, Tab = "Collection" },
 }
 local descriptorByKey = {}
 for _, descriptor in ipairs(descriptors) do
@@ -372,28 +372,28 @@ end
 local function settingsChanged()
     state.revision = state.revision + 1
     cancelMovement()
-    setStatus(state.enabled and "Einstellungen übernommen · suche Baum …" or "Einstellungen übernommen · pausiert")
+    setStatus(state.enabled and "Settings applied · finding a tree…" or "Settings applied · paused")
 end
 
 function state.applySetting(key, text)
-    if not isAlive() then return false, "UI beendet" end
+    if not isAlive() then return false, "UI closed" end
     local descriptor = descriptorByKey[key]
-    if not descriptor then return false, "Unbekanntes Feld" end
+    if not descriptor then return false, "Unknown field" end
     local value = tonumber((tostring(text):gsub(",", ".")))
     if not value or value ~= value or math.abs(value) == math.huge then
-        return false, "Eine gültige Zahl eingeben"
+        return false, "Enter a valid number"
     end
     if value < descriptor.Min then return false, "Minimum: " .. format(descriptor.Min) end
     if descriptor.Max and value > descriptor.Max then return false, "Maximum: " .. format(descriptor.Max) end
-    if descriptor.Integer and value % 1 ~= 0 then return false, "Eine ganze Zahl eingeben" end
+    if descriptor.Integer and value % 1 ~= 0 then return false, "Enter a whole number" end
     if key == "MinTweenTime" and value > config.MaxTweenTime then
-        return false, "Minimale Zeit darf maximale Zeit nicht übersteigen"
+        return false, "Minimum time cannot exceed maximum time"
     end
     if key == "MaxTweenTime" and value < config.MinTweenTime then
-        return false, "Maximale Zeit darf minimale Zeit nicht unterschreiten"
+        return false, "Maximum time cannot be below minimum time"
     end
     if key == "MaxChopDistance" and value < TREE_DISTANCE then
-        return false, "Schlagdistanz muss mindestens Abstand sein"
+        return false, "Hit distance must cover the tree approach distance"
     end
     config[key] = value
     syncField(key)
@@ -411,7 +411,7 @@ local function commit(key, value)
     if not ok then
         syncField(key)
         setStatus(message)
-        state.window:Notify({ title = "Eingabe prüfen", content = message })
+        state.window:Notify({ title = "Invalid Input", content = message })
     end
 end
 
@@ -419,7 +419,7 @@ local function syncSellCapacityUI()
     local field = state.controls.SellThreshold
     if not field then return end
     if config.AutoDetectBackpackCapacity then
-        field:Lock("Die aktuelle Rucksackkapazität bestimmt die Verkaufsschwelle")
+        field:Lock("Sell threshold follows backpack capacity")
         if field.input:IsFocused() then field.input:ReleaseFocus() end
         field.main.Visible = false
     else
@@ -463,16 +463,16 @@ local function createThemeStudio(window)
         Amethyst = "amethyst", Frost = "frost", Rose = "rose", macOS = "macos",
     }
     local categories = {
-        "Vorlagen & Speichern", "Akzent & Schrift", "Fenster", "Tabs",
-        "Elemente", "Schalter & Slider", "Felder & Meldungen", "Formen & Transparenz",
+        "Presets & Saved Themes", "Accent & Typography", "Window", "Tabs",
+        "Elements", "Toggles & Sliders", "Fields & Dialogs", "Shape & Transparency",
     }
     local fontEnums = {
         ["Gotham"] = "Gotham", ["Gotham Medium"] = "GothamMedium",
-        ["Gotham Fett"] = "GothamBold", ["Arial"] = "Arial",
+        ["Gotham Bold"] = "GothamBold", ["Arial"] = "Arial",
         ["Roboto"] = "Roboto", ["Roboto Mono"] = "RobotoMono",
         ["Source Sans"] = "SourceSans", ["Builder Sans"] = "BuilderSans",
     }
-    local fonts, fontOptions = {}, { "Gen2 (Standard)" }
+    local fonts, fontOptions = {}, { "Gen2 (Default)" }
     for name, enumName in pairs(fontEnums) do
         local ok, font = pcall(function() return Font.fromEnum(Enum.Font[enumName]) end)
         if ok then
@@ -482,53 +482,53 @@ local function createThemeStudio(window)
     end
     table.sort(fontOptions)
     local specs = {
-        { "AccentColor", "Akzentfarbe", "color", "Akzent & Schrift" },
-        { "AccentStroke", "Akzentkontur", "color", "Akzent & Schrift" },
-        { "ContentColor", "Textfarbe", "color", "Akzent & Schrift" },
-        { "TitlingColor", "Fenstertitel", "color", "Akzent & Schrift" },
-        { "ElementTextHoverColor", "Text beim Darüberfahren", "color", "Akzent & Schrift" },
-        { "ActionColor", "Symbole in der Titelleiste", "color", "Akzent & Schrift" },
-        { "Font", "Schrift für Inhalte", "font", "Akzent & Schrift" },
-        { "TitleFont", "Schrift für Überschriften", "font", "Akzent & Schrift" },
-        { "WindowColor", "Fensterverlauf", "gradient", "Fenster" },
-        { "ShadowColor", "Fensterschatten", "color", "Fenster" },
-        { "SurfaceStroke", "Feine Oberflächenkontur", "color", "Fenster" },
-        { "LiveAnimation", "Animierter Fensterverlauf", "boolean", "Fenster" },
-        { "TabColor", "Aktiver Tab: Text", "color", "Tabs" },
-        { "TabBackground", "Aktiver Tab: Verlauf", "gradient", "Tabs" },
-        { "TabStroke", "Aktiver Tab: Konturverlauf", "gradient", "Tabs" },
-        { "ElementGradient", "Karten: Verlauf", "gradient", "Elemente", nil, nil, "ElementTransparency" },
-        { "ElementStroke", "Karten: Kontur", "color", "Elemente", nil, nil, "ElementStrokeTransparency" },
-        { "ElementStrokeGradient", "Karten: Konturverlauf", "gradient", "Elemente" },
-        { "ElementStrokeHover", "Karten: Kontur beim Darüberfahren", "color", "Elemente", nil, nil, "ElementStrokeHoverTransparency" },
-        { "StatBackground", "Statistik-Karten", "color", "Elemente" },
-        { "SliderBackground", "Slider: Spur", "color", "Schalter & Slider" },
-        { "SliderBackgroundHover", "Slider: Spur beim Darüberfahren", "color", "Schalter & Slider" },
-        { "SliderProgress", "Slider: Füllverlauf", "gradient", "Schalter & Slider" },
-        { "SliderStroke", "Slider: Kontur", "color", "Schalter & Slider" },
-        { "SliderHandle", "Slider: Griff", "color", "Schalter & Slider" },
-        { "ToggleTrack", "Schalter: Hintergrund", "color", "Schalter & Slider", nil, nil, "ToggleTrackTransparency" },
-        { "ToggleKnobOff", "Schalter: Knopf im Aus-Zustand", "color", "Schalter & Slider", nil, nil, "ToggleKnobOffTransparency" },
-        { "DarkToggleOverlay", "Dunkle Schalterüberlagerung", "boolean", "Schalter & Slider" },
-        { "DropdownHighlight", "Auswahlmarkierung", "color", "Schalter & Slider" },
-        { "FieldBackground", "Eingabefelder: Hintergrund", "color", "Felder & Meldungen", nil, nil, "FieldTransparency" },
-        { "FieldGlow", "Eingabefelder: Leuchten", "color", "Felder & Meldungen" },
-        { "PlaceholderColor", "Platzhaltertext", "color", "Felder & Meldungen" },
-        { "NeutralButton", "Dialog-Buttons", "color", "Felder & Meldungen" },
-        { "NeutralButtonHover", "Dialog-Buttons beim Darüberfahren", "color", "Felder & Meldungen" },
-        { "NeutralButtonStroke", "Dialog-Buttons: Kontur", "color", "Felder & Meldungen" },
-        { "ErrorColor", "Fehlerfarbe", "color", "Felder & Meldungen" },
-        { "ErrorStrokeColor", "Fehlerkontur", "color", "Felder & Meldungen" },
-        { "CornerRoundness", "Fensterrundung", "radius", "Formen & Transparenz", 0, 32 },
-        { "PillCornerRadius", "Tab-Rundung · 32 = rund", "radius", "Formen & Transparenz", 0, 32 },
-        { "ElementCornerRadius", "Kartenrundung", "radius", "Formen & Transparenz", 0, 32 },
-        { "ElementTransparency", "Karten: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "ElementStrokeTransparency", "Kartenkontur: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "ElementStrokeHoverTransparency", "Hover-Kontur: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "FieldTransparency", "Eingabefelder: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "ToggleTrackTransparency", "Schalterspur: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "ToggleKnobOffTransparency", "Schalterknopf: Transparenz", "number", "Formen & Transparenz", 0, 1 },
-        { "AccentGlow", "Akzentleuchten · 1 = aus", "number", "Formen & Transparenz", 0, 1 },
+        { "AccentColor", "Accent Color", "color", "Accent & Typography" },
+        { "AccentStroke", "Accent Outline", "color", "Accent & Typography" },
+        { "ContentColor", "Text Color", "color", "Accent & Typography" },
+        { "TitlingColor", "Window Title", "color", "Accent & Typography" },
+        { "ElementTextHoverColor", "Text Hover Color", "color", "Accent & Typography" },
+        { "ActionColor", "Title Bar Icons", "color", "Accent & Typography" },
+        { "Font", "Body Font", "font", "Accent & Typography" },
+        { "TitleFont", "Heading Font", "font", "Accent & Typography" },
+        { "WindowColor", "Window Gradient", "gradient", "Window" },
+        { "ShadowColor", "Window Shadow", "color", "Window" },
+        { "SurfaceStroke", "Surface Outline", "color", "Window" },
+        { "LiveAnimation", "Animated Window Gradient", "boolean", "Window" },
+        { "TabColor", "Active Tab Text", "color", "Tabs" },
+        { "TabBackground", "Active Tab Gradient", "gradient", "Tabs" },
+        { "TabStroke", "Active Tab Outline Gradient", "gradient", "Tabs" },
+        { "ElementGradient", "Card Gradient", "gradient", "Elements", nil, nil, "ElementTransparency" },
+        { "ElementStroke", "Card Outline", "color", "Elements", nil, nil, "ElementStrokeTransparency" },
+        { "ElementStrokeGradient", "Card Outline Gradient", "gradient", "Elements" },
+        { "ElementStrokeHover", "Card Hover Outline", "color", "Elements", nil, nil, "ElementStrokeHoverTransparency" },
+        { "StatBackground", "Stat Cards", "color", "Elements" },
+        { "SliderBackground", "Slider Track", "color", "Toggles & Sliders" },
+        { "SliderBackgroundHover", "Slider Track Hover", "color", "Toggles & Sliders" },
+        { "SliderProgress", "Slider Fill Gradient", "gradient", "Toggles & Sliders" },
+        { "SliderStroke", "Slider Outline", "color", "Toggles & Sliders" },
+        { "SliderHandle", "Slider Handle", "color", "Toggles & Sliders" },
+        { "ToggleTrack", "Toggle Track", "color", "Toggles & Sliders", nil, nil, "ToggleTrackTransparency" },
+        { "ToggleKnobOff", "Toggle Knob (Off)", "color", "Toggles & Sliders", nil, nil, "ToggleKnobOffTransparency" },
+        { "DarkToggleOverlay", "Dark Toggle Overlay", "boolean", "Toggles & Sliders" },
+        { "DropdownHighlight", "Selection Highlight", "color", "Toggles & Sliders" },
+        { "FieldBackground", "Field Background", "color", "Fields & Dialogs", nil, nil, "FieldTransparency" },
+        { "FieldGlow", "Field Glow", "color", "Fields & Dialogs" },
+        { "PlaceholderColor", "Placeholder Text", "color", "Fields & Dialogs" },
+        { "NeutralButton", "Dialog Buttons", "color", "Fields & Dialogs" },
+        { "NeutralButtonHover", "Dialog Button Hover", "color", "Fields & Dialogs" },
+        { "NeutralButtonStroke", "Dialog Button Outline", "color", "Fields & Dialogs" },
+        { "ErrorColor", "Error Color", "color", "Fields & Dialogs" },
+        { "ErrorStrokeColor", "Error Outline", "color", "Fields & Dialogs" },
+        { "CornerRoundness", "Window Corner Radius", "radius", "Shape & Transparency", 0, 32 },
+        { "PillCornerRadius", "Tab Corner Radius · 32 = Pill", "radius", "Shape & Transparency", 0, 32 },
+        { "ElementCornerRadius", "Card Corner Radius", "radius", "Shape & Transparency", 0, 32 },
+        { "ElementTransparency", "Card Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "ElementStrokeTransparency", "Card Outline Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "ElementStrokeHoverTransparency", "Hover Outline Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "FieldTransparency", "Field Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "ToggleTrackTransparency", "Toggle Track Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "ToggleKnobOffTransparency", "Toggle Knob Transparency", "number", "Shape & Transparency", 0, 1 },
+        { "AccentGlow", "Accent Glow · 1 = Off", "number", "Shape & Transparency", 0, 1 },
     }
     local byKey = {}
     for _, spec in ipairs(specs) do byKey[spec[1]] = spec end
@@ -540,9 +540,9 @@ local function createThemeStudio(window)
     end
     local function hex(value)
         if typeof(value) == "Color3" then return "#" .. value:ToHex():upper() end
-        if type(value) ~= "string" then error("Hex-Farbe erwartet") end
+        if type(value) ~= "string" then error("Expected a hex color") end
         local clean = value:gsub("^#", "")
-        if #clean ~= 6 or not clean:match("^%x+$") then error("Farbe als #RRGGBB eingeben") end
+        if #clean ~= 6 or not clean:match("^%x+$") then error("Enter a color as #RRGGBB") end
         return "#" .. clean:upper()
     end
     local function color(value) return Color3.fromHex(hex(value)) end
@@ -550,37 +550,39 @@ local function createThemeStudio(window)
         local kind = spec[3]
         if kind == "color" then return hex(value) end
         if kind == "gradient" then
-            if type(value) ~= "table" then error("Zwei Verlaufsfarben erwartet") end
+            if type(value) ~= "table" then error("Expected two gradient colors") end
             return { first = hex(value.first), last = hex(value.last) }
         end
         if kind == "number" or kind == "radius" then
             if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge
                 or value < spec[5] or value > spec[6] then
-                error(spec[2] .. ": Wert außerhalb des Bereichs")
+                error(spec[2] .. ": value out of range")
             end
             return value
         end
         if kind == "boolean" then
-            if type(value) ~= "boolean" then error("Ein/Aus-Wert erwartet") end
+            if type(value) ~= "boolean" then error("Expected an on/off value") end
             return value
         end
         if kind == "font" then
-            if value ~= "Gen2 (Standard)" and not fonts[value] then error("Unbekannte Schrift") end
+            if value == "Gotham Fett" then value = "Gotham Bold" end
+            if value == "Gen2 (Standard)" then value = "Gen2 (Default)" end
+            if value ~= "Gen2 (Default)" and not fonts[value] then error("Unknown font") end
             return value
         end
-        error("Unbekannte Theme-Eigenschaft")
+        error("Unknown theme property")
     end
     local function validateRecord(record)
         if type(record) ~= "table" or record.version ~= 1
             or type(record.base) ~= "string" or type(record.overrides) ~= "table" then
-            error("Kein gültiges Forest-Control-Theme")
+            error("Invalid Forest Control theme")
         end
         local found = false
         for _, base in pairs(bases) do if record.base == base then found = true end end
-        if not found then error("Unbekannte Theme-Vorlage") end
+        if not found then error("Unknown theme preset") end
         local clean = { version = 1, base = record.base, overrides = {} }
         for key, value in pairs(record.overrides) do
-            if not byKey[key] then error("Unbekannte Theme-Eigenschaft: " .. tostring(key)) end
+            if not byKey[key] then error("Unknown theme property: " .. tostring(key)) end
             clean.overrides[key] = normalizeValue(byKey[key], value)
         end
         return clean
@@ -656,8 +658,8 @@ local function createThemeStudio(window)
         environment[BANK_KEY] = bank
     end
     local studio = {
-        alive = true, controls = {}, history = {}, category = "Vorlagen & Speichern",
-        name = bank.name or "Mein macOS Theme", selected = nil, json = "", tab = nil,
+        alive = true, controls = {}, history = {}, category = "Presets & Saved Themes",
+        name = bank.name or "My macOS Theme", selected = nil, json = "", tab = nil,
         renderTask = nil, syncing = false,
     }
     local activeOk, active = pcall(validateRecord, bank.active)
@@ -712,7 +714,7 @@ local function createThemeStudio(window)
     local function displayValue(spec)
         local key, kind = spec[1], spec[3]
         local value = resolved(key)
-        if kind == "font" then return studio.record.overrides[key] or (studio.record.base == "macos" and macColors[key]) or "Gen2 (Standard)" end
+        if kind == "font" then return studio.record.overrides[key] or (studio.record.base == "macos" and macColors[key]) or "Gen2 (Default)" end
         if kind == "radius" then
             return typeof(value) == "UDim" and (value.Scale > 0 and 32 or value.Offset) or 0
         end
@@ -729,18 +731,18 @@ local function createThemeStudio(window)
         end
     end
     function studio.setValues(values)
-        assert(isAlive() and studio.alive, "Theme Studio beendet")
+        assert(isAlive() and studio.alive, "Theme Studio closed")
         local clean = {}
         local restoreBase = false
         for key, value in pairs(values) do
-            assert(byKey[key], "Unbekannte Theme-Eigenschaft")
+            assert(byKey[key], "Unknown theme property")
             clean[key] = normalizeValue(byKey[key], value)
-            if byKey[key][3] == "font" and value == "Gen2 (Standard)" then restoreBase = true end
+            if byKey[key][3] == "font" and value == "Gen2 (Default)" then restoreBase = true end
         end
         pushHistory()
         for key, value in pairs(clean) do
             studio.record.overrides[key] = value
-            if byKey[key][3] == "font" and value == "Gen2 (Standard)" then studio.record.overrides[key] = nil end
+            if byKey[key][3] == "font" and value == "Gen2 (Default)" then studio.record.overrides[key] = nil end
         end
         if restoreBase then
             applyRecord(studio.record, false)
@@ -752,13 +754,13 @@ local function createThemeStudio(window)
         return true
     end
     function studio.setPreset(label)
-        assert(bases[label], "Unbekannte Vorlage")
+        assert(bases[label], "Unknown preset")
         applyRecord({ version = 1, base = bases[label], overrides = {} }, true)
         return true
     end
     function studio.undo()
         local previousRecord = table.remove(studio.history)
-        if not previousRecord then return false, "Noch keine Änderung zum Zurücknehmen" end
+        if not previousRecord then return false, "Nothing to undo" end
         applyRecord(previousRecord, false)
         return true
     end
@@ -775,18 +777,18 @@ local function createThemeStudio(window)
         return true
     end
     local function cleanName(name)
-        assert(type(name) == "string", "Theme-Namen eingeben")
+        assert(type(name) == "string", "Enter a theme name")
         name = name:match("^%s*(.-)%s*$")
-        assert(#name > 0 and #name <= 80, "Theme-Namen mit 1 bis 80 Zeichen eingeben")
+        assert(#name > 0 and #name <= 80, "Theme name must be 1–80 characters")
         return name
     end
     local function saveBank()
-        if type(writefile) ~= "function" then return false, "Nur in dieser Spielsitzung gespeichert" end
+        if type(writefile) ~= "function" then return false, "Saved for this session only" end
         if type(makefolder) == "function" then pcall(makefolder, "ForestControl") end
         local ok = pcall(writefile, FILE, HttpService:JSONEncode({
             version = 1, saved = bank.saved, active = studio.record, name = studio.name,
         }))
-        return ok, ok and "Lokal unter ForestControl/Themes.json gespeichert" or "Sitzung gespeichert; Datei konnte nicht geschrieben werden"
+        return ok, ok and "Saved to ForestControl/Themes.json" or "Saved for this session; file could not be written"
     end
     function studio.listSaved()
         local names = {}
@@ -799,13 +801,13 @@ local function createThemeStudio(window)
         bank.saved[studio.name] = clone(studio.record)
         studio.selected = studio.name
         remember()
-        local stored, message = false, "In dieser Spielsitzung gespeichert"
+        local stored, message = false, "Saved for this session"
         if persist ~= false then stored, message = saveBank() end
         return true, message, stored
     end
     function studio.load(name)
         local record = bank.saved[name]
-        assert(record, "Zuerst ein gespeichertes Theme auswählen")
+        assert(record, "Select a saved theme first")
         studio.name = name
         studio.selected = name
         applyRecord(record, true)
@@ -817,9 +819,9 @@ local function createThemeStudio(window)
         return HttpService:JSONEncode(record)
     end
     function studio.importJSON(text)
-        assert(type(text) == "string" and #text > 0 and #text <= 64000, "Theme-JSON mit höchstens 64 KB einfügen")
+        assert(type(text) == "string" and #text > 0 and #text <= 64000, "Paste theme JSON, up to 64 KB")
         local ok, decoded = pcall(HttpService.JSONDecode, HttpService, text)
-        assert(ok, "Ungültiges JSON")
+        assert(ok, "Invalid JSON")
         local record = validateRecord(decoded)
         local importedName = decoded.name and cleanName(decoded.name) or studio.name
         applyRecord(record, true)
@@ -833,12 +835,12 @@ local function createThemeStudio(window)
             studio.renderTask = nil
             if isAlive() and studio.alive then
                 local ok, message = pcall(render)
-                if not ok then notify("Editor konnte nicht angezeigt werden: " .. tostring(message)) end
+                if not ok then notify("Could not open the editor: " .. tostring(message)) end
             end
         end)
     end
     function studio.selectCategory(category)
-        assert(table.find(categories, category), "Unbekannter Bereich")
+        assert(table.find(categories, category), "Unknown section")
         studio.category = category
         scheduleRender()
     end
@@ -856,7 +858,7 @@ local function createThemeStudio(window)
         local controls = studio.controls
         if controls.Preset then controls.Preset:Set(activeLabel(), true) end
         if controls.Name then controls.Name:Set(studio.name, true) end
-        if controls.Info then controls.Info:Set(activeLabel() .. " · " .. countEdits() .. " eigene Anpassungen · Änderungen sind sofort sichtbar.") end
+        if controls.Info then controls.Info:Set(activeLabel() .. " · " .. countEdits() .. " custom changes · live preview.") end
         for _, spec in ipairs(specs) do
             local key, kind = spec[1], spec[3]
             if kind == "gradient" then
@@ -880,11 +882,11 @@ local function createThemeStudio(window)
         local first, last = gradientEnds(key)
         local value = endpoint and (endpoint == "first" and first or last) or resolved(key)
         local alpha = spec[7] and 1 - (tonumber(resolved(spec[7])) or 0) or 1
-        local suffix = endpoint and (endpoint == "first" and " · Anfang" or " · Ende") or ""
+        local suffix = endpoint and (endpoint == "first" and " · Start" or " · End") or ""
         local id = key .. (endpoint and "_" .. endpoint or "")
         studio.controls[id] = tab:CreateColorPicker({
             name = spec[2] .. suffix,
-            description = spec[7] and "Farbe und Deckkraft direkt anpassen." or "RGB oder Hex wählen; Transparenz separat im Bereich Formen.",
+            description = spec[7] and "Adjust color and opacity." or "Set an RGB or hex color. Adjust transparency under Shape & Transparency.",
             color = value, alpha = alpha, forgetState = true,
             callback = protected(function(picked, opacity)
                 local patch = {}
@@ -907,32 +909,32 @@ local function createThemeStudio(window)
         local tab = window:CreateTab({ name = "Themes" })
         studio.tab = tab
         studio.controls.Preset = tab:CreateDropdown({
-            name = "Basis-Preset", options = labels, value = activeLabel(), forgetState = true,
-            description = "Vorlage auswählen oder unten einen Bereich bearbeiten.",
+            name = "Base Preset", options = labels, value = activeLabel(), forgetState = true,
+            description = "Choose a preset or customize a section below.",
             callback = protected(function(value) studio.setPreset(value) end),
         })
         studio.controls.Category = tab:CreateDropdown({
-            name = "Bearbeiten", options = categories, value = studio.category, forgetState = true,
+            name = "Edit Section", options = categories, value = studio.category, forgetState = true,
             callback = protected(function(value) studio.selectCategory(value) end),
         })
-        if studio.category == "Vorlagen & Speichern" then
+        if studio.category == "Presets & Saved Themes" then
             studio.controls.Info = tab:CreateText({ name = "Theme Studio", text = "" })
             studio.controls.Name = tab:CreateInput({
-                name = "Name deines Themes", value = studio.name, forgetState = true,
+                name = "Theme Name", value = studio.name, forgetState = true,
                 callback = protected(function(value)
                     studio.name = cleanName(value)
                     remember()
                 end),
             })
             studio.controls.Saved = tab:CreateDropdown({
-                name = "Gespeicherte Themes", options = studio.listSaved(), value = studio.selected,
-                placeholder = "Noch kein Theme gewählt", forgetState = true,
+                name = "Saved Themes", options = studio.listSaved(), value = studio.selected,
+                placeholder = "Select a theme", forgetState = true,
                 callback = protected(function(value) studio.selected = value end),
             })
             local row = tab:CreateGroup()
             row:CreateButton({
-                name = "Theme speichern",
-                description = "Lokal im Executor-Ordner ForestControl speichern.",
+                name = "Save Theme",
+                description = "Save locally in the ForestControl folder.",
                 callback = protected(function()
                     local _, message = studio.save(studio.name, true)
                     scheduleRender()
@@ -940,34 +942,34 @@ local function createThemeStudio(window)
                 end),
             })
             row:CreateButton({
-                name = "Theme laden",
+                name = "Load Theme",
                 callback = protected(function()
                     studio.load(studio.selected)
                     scheduleRender()
                 end),
             })
             studio.controls.JSON = tab:CreateInput({
-                name = "Theme als JSON", value = studio.json, placeholder = "JSON hier einfügen", forgetState = true,
+                name = "Theme JSON", value = studio.json, placeholder = "Paste JSON here", forgetState = true,
                 callback = protected(function(value) studio.json = value end),
             })
             local share = tab:CreateGroup()
             share:CreateButton({
-                name = "JSON kopieren",
+                name = "Copy JSON",
                 callback = protected(function()
                     studio.json = studio.exportJSON()
                     studio.controls.JSON:Set(studio.json, true)
                     if type(setclipboard) == "function" then
                         setclipboard(studio.json)
-                        notify("Theme-JSON kopiert")
-                    else notify("Theme-JSON steht im Textfeld zum Kopieren") end
+                        notify("Theme JSON copied")
+                    else notify("Copy the theme JSON from the text field") end
                 end),
             })
             share:CreateButton({
-                name = "JSON importieren",
+                name = "Import JSON",
                 callback = protected(function()
                     studio.importJSON(studio.json)
                     scheduleRender()
-                    notify("Theme importiert")
+                    notify("Theme imported")
                 end),
             })
         else
@@ -1001,16 +1003,16 @@ local function createThemeStudio(window)
         end
         local actions = tab:CreateGroup()
         actions:CreateButton({
-            name = "Rückgängig",
+            name = "Undo",
             callback = protected(function()
                 local ok, message = studio.undo()
                 if not ok then notify(message) end
             end),
         })
-        if studio.category ~= "Vorlagen & Speichern" then
-            actions:CreateButton({ name = "Bereich zurücksetzen", callback = protected(studio.resetSection) })
+        if studio.category ~= "Presets & Saved Themes" then
+            actions:CreateButton({ name = "Reset Section", callback = protected(studio.resetSection) })
         end
-        actions:CreateButton({ name = "Vorlage zurücksetzen", callback = protected(studio.resetPreset) })
+        actions:CreateButton({ name = "Reset to Preset", callback = protected(studio.resetPreset) })
         studio.syncing = false
         syncVisible()
         tab:Select(true)
@@ -1228,7 +1230,7 @@ local function createGunAssist(getFlags)
         local flags = getFlags()
         if not flags.NoRecoil and not flags.NoSpread and not flags.SilentAim then
             manager.detach()
-            report("Schusshilfen ausgeschaltet")
+            report("Weapon assists off")
             return
         end
         local now = os.clock()
@@ -1239,7 +1241,7 @@ local function createGunAssist(getFlags)
         if not manager.binding then
             if now < manager.nextCheck then return end
             manager.nextCheck = now + 1
-            if not attach() then report("Warte auf Waffensteuerung …"); return end
+            if not attach() then report("Waiting for weapon controls…"); return end
         end
         local binding = manager.binding
         for _, name in ipairs(names) do
@@ -1254,7 +1256,7 @@ local function createGunAssist(getFlags)
         if not flags.NoSpread then restore("spread") end
         if not flags.NoRecoil then restore("recoil") else resetRecoil(binding.recoil) end
         for model in pairs(manager.heights) do if not model.Parent then manager.heights[model] = nil end end
-        report("Schusshilfen bereit · Pistole / AK / Minigun")
+        report("Weapon assists ready · Pistol / AK / Minigun")
     end
     function manager.step()
         if not manager.alive then return end
@@ -1262,7 +1264,7 @@ local function createGunAssist(getFlags)
         if not ok then
             manager.detach()
             manager.nextCheck = os.clock() + 2
-            report("Schusshilfen warten auf Waffensteuerung …")
+            report("Weapon assists waiting for controls…")
             if manager.error ~= tostring(message) then
                 manager.error = tostring(message)
                 warn("[ForestControl Guns] " .. manager.error)
@@ -1489,16 +1491,16 @@ local function createPlayerTab(window)
     controller.step = step
 
     tab:CreateText({
-        name = "Player-Funktionen & Keybinds",
-        text = "Ohne geladene Config starten Funktionen ausgeschaltet und Keybinds unbelegt. Taste anklicken und belegen; Backspace löscht die Belegung. Noclip aus = Clip.",
+        name = "Player Controls",
+        text = "Features start off with no keybinds unless a config is loaded. Click a keybind to assign it; Backspace clears it. Turn Noclip off to restore collisions.",
     })
     local features = {
-        { key = "Fly", name = "Fly", keybind = true, speed = "FlySpeed", hint = "WASD folgt der Kamera · Leertaste hoch · linke Strg runter. Pausiert den Autofarm." },
-        { key = "WalkSpeed", name = "Walkspeed", keybind = true, speed = "WalkSpeed", hint = "Eigenen Laufwert einschalten; beim Ausschalten gilt wieder der Spielwert." },
-        { key = "Noclip", name = "Noclip / Clip", keybind = true, hint = "Ein: durch Hindernisse bewegen. Aus: ursprüngliche Kollision der Charakterteile wiederherstellen." },
-        { key = "NoRecoil", name = "No Recoil", hint = "Entfernt den lokalen Waffenrückstoß bei Pistole, AK und Minigun." },
-        { key = "NoSpread", name = "No Spread", hint = "Entfernt die lokale Geschossstreuung bei Pistole, AK und Minigun." },
-        { key = "SilentAim", name = "Silent Aim", hint = "Lenkt manuelle Schüsse auf sichtbare kleine Monster und Bosse nächst am Fadenkreuz. Beachtet Reichweite und Hindernisse; bewegt die Kamera nicht." },
+        { key = "Fly", name = "Fly", keybind = true, speed = "FlySpeed", hint = "WASD follows the camera. Space ascends; Left Ctrl descends. Pauses Auto Farm." },
+        { key = "WalkSpeed", name = "Walk Speed", keybind = true, speed = "WalkSpeed", hint = "Use a custom walk speed. Turning this off restores the game value." },
+        { key = "Noclip", name = "Noclip / Clip", keybind = true, hint = "Pass through obstacles. Turning this off restores character collisions." },
+        { key = "NoRecoil", name = "No Recoil", hint = "Removes local recoil for the Pistol, AK, and Minigun." },
+        { key = "NoSpread", name = "No Spread", hint = "Removes local bullet spread for the Pistol, AK, and Minigun." },
+        { key = "SilentAim", name = "Silent Aim", hint = "Directs manual shots at the visible enemy nearest the crosshair, within range and line of sight. Keeps the camera still." },
     }
     for _, feature in ipairs(features) do
         local key = feature.key
@@ -1652,10 +1654,10 @@ local function createUpgradeAutomation()
             if a.price ~= b.price then return a.price < b.price end
             return a.id < b.id
         end)
-        local policy = special and "Klassenwaffe erkannt · keine Axt-/Kettensägenkäufe"
-            or not config.AutoBuyFarmTools and "Werkzeugkäufe ausgeschaltet"
-            or present("Chainsaw") and "Kettensäge vorhanden · Axt als Backup prüfen"
-            or "Fehlende Axt und Kettensäge mit Run-Münzen kaufen"
+        local policy = special and "Class weapon detected · skipping Axe and Chainsaw purchases"
+            or not config.AutoBuyFarmTools and "Tool purchases off"
+            or present("Chainsaw") and "Chainsaw owned · checking for a backup Axe"
+            or "Buy missing Axe and Chainsaw with run coins"
         return actions, policy .. "\n" .. table.concat(lines, "\n"), levels, maximum
     end
     local function ready(data)
@@ -1686,7 +1688,7 @@ local function createUpgradeAutomation()
         controller.worker = nil
     end
     function controller.changed(key)
-        if key == "AutoUpgrade" and not config.AutoUpgrade then controller.cancel(); report("Ausgeschaltet") end
+        if key == "AutoUpgrade" and not config.AutoUpgrade then controller.cancel(); report("Off") end
         if key == "AutoBuyFarmTools" and not config.AutoBuyFarmTools and state.upgradeBusy then controller.cancel() end
     end
     local function actionCurrent(data, action)
@@ -1755,7 +1757,7 @@ local function createUpgradeAutomation()
         if not root then return end
         local station = findStation(action.id, data, root.Position)
         if not station then
-            fail(action, action.name .. " · warte auf einen freigeschalteten Verkaufsstand")
+            fail(action, action.name .. " · waiting for an unlocked shop")
             return
         end
         local job = { character = character, root = root, origin = root.Position, epoch = controller.epoch }
@@ -1767,7 +1769,7 @@ local function createUpgradeAutomation()
             if state.combat.stopSaw then state.combat.stopSaw() end
             if state.combat.stopNative then state.combat.stopNative() end
         end
-        report("Kaufe " .. action.name .. " · " .. action.price .. " Münzen · zum Stand")
+        report("Buying " .. action.name .. " · " .. action.price .. " coins · traveling to shop")
         local offset = Vector3.new(root.Position.X - station.anchor.Position.X, 0, root.Position.Z - station.anchor.Position.Z)
         offset = offset.Magnitude > 0.01 and offset.Unit or Vector3.new(1, 0, 0)
         local destination = station.anchor.Position + offset * math.min(3, station.range / 3)
@@ -1791,10 +1793,10 @@ local function createUpgradeAutomation()
                         and result.ok and type(result.response) == "table" and result.response.Ok and os.clock() < untilAt do task.wait(0.05) end
                     if player:GetAttribute("Owns" .. action.id) == true then
                         controller.stats.bought = controller.stats.bought + 1
-                        report(action.name .. " gekauft · Besitz vom Server bestätigt")
+                        report(action.name .. " purchased · ownership confirmed")
                     else
-                        local reason = type(result.response) == "table" and result.response.Why or "Keine Bestätigung"
-                        fail(action, action.name .. " nicht bestätigt · " .. tostring(reason))
+                        local reason = type(result.response) == "table" and result.response.Why or "No confirmation"
+                        fail(action, action.name .. " not confirmed · " .. tostring(reason))
                     end
                 end
             end
@@ -1803,13 +1805,13 @@ local function createUpgradeAutomation()
         if controller.epoch == job.epoch then controller.cancel() end
     end
     function controller.step()
-        if not config.AutoUpgrade then report("Ausgeschaltet"); return end
+        if not config.AutoUpgrade then report("Off"); return end
         local data = resolve()
-        if not data then report("Warte auf Kauf- und Upgrade-Daten"); return end
+        if not data then report("Waiting for shop and upgrade data"); return end
         local actions, summary, levels, maximum = controller.plan(data)
-        if not ready(data) then report(data.place.IsLobby() and "Lobby · Upgrades beginnen erst im Run" or "Warte auf einen aktiven Run / freie Interaktion", summary); return end
+        if not ready(data) then report(data.place.IsLobby() and "Lobby · upgrades start in a run" or "Waiting for an active run or interaction to finish", summary); return end
         local cash = money()
-        if cash == nil then report("Warte auf Run-Münzen", summary); return end
+        if cash == nil then report("Waiting for run coins", summary); return end
         local pending = controller.pending
         if pending then
             local level = data.math.Level(player, pending.id)
@@ -1817,10 +1819,10 @@ local function createUpgradeAutomation()
                 controller.stats.upgraded = controller.stats.upgraded + 1
                 controller.pending = nil
                 controller.nextAction = os.clock() + 0.12
-                report(pending.name .. " · Stufe " .. level .. "/" .. pending.maximum .. " bestätigt", summary)
+                report(pending.name .. " · level " .. level .. "/" .. pending.maximum .. " confirmed", summary)
             elseif player:GetAttribute("UpgradeRefusedAt") ~= pending.refused or os.clock() >= pending.deadline then
                 controller.pending = nil
-                fail(pending, pending.name .. " nicht bestätigt · " .. tostring(player:GetAttribute("UpgradeRefusedWhy") or "neuer Versuch folgt"))
+                fail(pending, pending.name .. " not confirmed · " .. tostring(player:GetAttribute("UpgradeRefusedWhy") or "retrying soon"))
             end
             return
         end
@@ -1831,11 +1833,11 @@ local function createUpgradeAutomation()
             if (controller.retries[action.key] or 0) <= os.clock() and cash >= action.price then selected = action; break end
         end
         if not selected then
-            report(#actions == 0 and ("Alle erkannten Ziele auf MAX · " .. levels .. "/" .. maximum)
-                or "Warte auf Münzen / Kaufmöglichkeit · " .. math.floor(cash) .. " vorhanden · nächster Preis ab " .. tostring(nextPrice), summary)
+            report(#actions == 0 and ("All detected upgrades at MAX · " .. levels .. "/" .. maximum)
+                or "Waiting for coins or an available shop · " .. math.floor(cash) .. " available · next cost from " .. tostring(nextPrice), summary)
             return
         end
-        report(selected.name .. " · " .. selected.price .. " Münzen", summary)
+        report(selected.name .. " · " .. selected.price .. " coins", summary)
         if selected.kind == "buy" then purchase(data, selected); return end
         -- Genau eine Stufe anfordern und erst nach der replizierten Leveländerung fortfahren.
         selected.refused = player:GetAttribute("UpgradeRefusedAt")
@@ -1846,17 +1848,17 @@ local function createUpgradeAutomation()
     function controller.createTab(window)
         local tab = window:CreateTab({ name = "Upgrades" })
         state.controls.AutoUpgrade = tab:CreateToggle({
-            name = "Automatisch bis MAX upgraden", value = config.AutoUpgrade, flag = "Setting_AutoUpgrade",
-            description = "Unabhängig vom Autofarm: verbessert vorhandene Axt, Kettensäge und Klassenwaffen sowie Chipper-Speed und Grasp mit Run-Münzen bis MAX. Wartet nach jeder Stufe auf die Serverbestätigung.",
+            name = "Auto Upgrade to MAX", value = config.AutoUpgrade, flag = "Setting_AutoUpgrade",
+            description = "Maxes owned tools, class weapons, Chipper Speed, and Grasp using run coins. Runs independently of Auto Farm and confirms each upgrade.",
             callback = function(value) commitBoolean("AutoUpgrade", value) end,
         })
         state.controls.AutoBuyFarmTools = tab:CreateToggle({
-            name = "Axt und Kettensäge automatisch kaufen", value = config.AutoBuyFarmTools, flag = "Setting_AutoBuyFarmTools",
-            description = "Nur bei aktiver Upgrade-Automatik. Erkennt vorhandene und permanente Werkzeuge. Bei eigenen Klassenwaffen entfallen beide Käufe; sonst bleibt die Axt als Backup für den bestehenden 85-%-Hitzewechsel.",
+            name = "Auto Buy Axe & Chainsaw", value = config.AutoBuyFarmTools, flag = "Setting_AutoBuyFarmTools",
+            description = "Requires Auto Upgrade. Skips owned or permanent tools and both purchases if you own a class weapon. Otherwise, buys an Axe as backup for the 85% heat swap.",
             callback = function(value) commitBoolean("AutoBuyFarmTools", value) end,
         })
-        state.controls.UpgradeStatus = tab:CreateText({ name = "Upgrade-Status", text = "Ausgeschaltet" })
-        state.controls.UpgradeTargets = tab:CreateText({ name = "Erkannte Ziele", text = "Werkzeuge, Preise und MAX-Stufen werden bei aktivierter Automatik aus dem Spiel gelesen." })
+        state.controls.UpgradeStatus = tab:CreateText({ name = "Upgrade Status", text = "Off" })
+        state.controls.UpgradeTargets = tab:CreateText({ name = "Detected Upgrades", text = "Reads tools, prices, and level caps while Auto Upgrade is enabled." })
         return tab
     end
     function controller.start()
@@ -1865,7 +1867,7 @@ local function createUpgradeAutomation()
                 local ok, message = xpcall(controller.step, function(reason) return debug.traceback(tostring(reason), 2) end)
                 if not ok and running() then
                     controller.cancel()
-                    report("Upgrade-Automatik wartet · Details in der Konsole")
+                    report("Auto Upgrade paused · see console")
                     warn("[ForestControl Upgrades] " .. tostring(message))
                     task.wait(3)
                 end
@@ -1981,11 +1983,11 @@ local function createRunAutomation()
             if state.treeCoordinator then state.treeCoordinator.clear() end
             if state.combat then state.combat.stopSaw(); state.combat.stopNative() end
             if config.AutoRavenRejoin then
-                state.cancelSell("Raben-Rejoin · Verkauf pausiert")
+                state.cancelSell("Raven Rejoin · selling paused")
                 if state.upgradeController then state.upgradeController.cancel() end
-                report("Raben-Rejoin · übrige Automatik pausiert")
+                report("Raven Rejoin · other automation paused")
             else
-                setStatus(state.enabled and "Autofarm wieder freigegeben" or "Raben-Rejoin ausgeschaltet")
+                setStatus(state.enabled and "Auto Farm resumed" or "Raven Rejoin off")
             end
         end
         if key == "AutoRepeatRun" and config.AutoRepeatRun ~= true then
@@ -2037,7 +2039,7 @@ local function createRunAutomation()
     end
     function controller.prepareTeleport()
         if not running() then return false end
-        if not controller.queueAvailable then report("Weltwechsel: Executor unterstützt keinen Teleport-Neustart"); return false end
+        if not controller.queueAvailable then report("World transfer: executor does not support teleport reloads"); return false end
         local record = capture()
         writeTeleportRecord(record)
         if controller.queued then return true end
@@ -2075,7 +2077,7 @@ for attempt = 1, 3 do
         assert(fn, reason)
         env.__ForestControlTeleportState = data
         fn()
-        assert(env.__BambooTweenFarm and env.__BambooTweenFarm.alive, "Forest Control nicht bereit")
+        assert(env.__BambooTweenFarm and env.__BambooTweenFarm.alive, "Forest Control is not ready")
     end)
     if ok then return end
     if attempt == 3 then warn("[ForestControl Teleport] " .. tostring(message)) else task.wait(2) end
@@ -2084,7 +2086,7 @@ end
         local accepted, message = pcall(queue, loader)
         controller.queued = accepted
         controller.everQueued = controller.everQueued or accepted
-        if not accepted then report("Teleport-Neustart fehlgeschlagen: " .. tostring(message)) end
+        if not accepted then report("Teleport reload failed: " .. tostring(message)) end
         return accepted
     end
     controller.connections.Teleport = player.OnTeleport:Connect(function(phase)
@@ -2100,7 +2102,7 @@ end
                 controller.nextRejoin = os.clock() + 8
                 if controller.ravenCycle then controller.ravenCycle.joinUntil = nil end
             end
-            report("Teleport fehlgeschlagen · erneuter Versuch folgt")
+            report("Teleport failed · retrying soon")
         end
     end)
     local function connect(name, source, callback)
@@ -2255,13 +2257,13 @@ end
             end
         end
         if not nearest then
-            if count >= (tonumber(ravens:GetAttribute("Total")) or 12) then report("Raben · alle " .. count .. " vom Server bestätigt") end
+            if count >= (tonumber(ravens:GetAttribute("Total")) or 12) then report("Ravens · all " .. count .. " confirmed by server") end
             return false
         end
         local job = beginJob(modeKey or "AutoRavens")
         if not job then return false end
         local raven = nearest
-        report("Raben · " .. count .. "/" .. tostring(ravens:GetAttribute("Total") or 12) .. " · " .. raven.Name)
+        report("Ravens · " .. count .. "/" .. tostring(ravens:GetAttribute("Total") or 12) .. " · " .. raven.Name)
         local id = raven:GetAttribute("RavenId") or raven.Name
         local success = usePrompt(job, raven:FindFirstChildWhichIsA("ProximityPrompt", true), function() return foundRavens()[id] == true end)
         controller.retry[raven] = os.clock() + (success and 0 or 8)
@@ -2291,7 +2293,7 @@ end
         if not hoard or hoard:GetAttribute("Open") == true then return false end
         local stone = hoardRunestone(wild, current)
         if not stone or stone:GetAttribute("Lit") ~= true then
-            report("Kiste wartet · Runestone 6 muss aktiviert sein")
+            report("Chest waiting · activate Runestone 6")
             return false
         end
         if (controller.retry[hoard] or 0) > os.clock() then return false end
@@ -2314,7 +2316,7 @@ end
         for index, entry in ipairs(pillars) do
             local turns = 0
             while jobValid(job) and hoard:GetAttribute("Open") ~= true and entry.object:GetAttribute("Rune") ~= entry.target and turns < 8 do
-                report("Kiste · Säule " .. index .. " auf Symbol " .. entry.target .. " drehen")
+                report("Chest · pillar " .. index .. " to symbol " .. entry.target .. "")
                 local previous = entry.object:GetAttribute("Rune")
                 if not usePrompt(job, entry.prompt, function() return entry.object:GetAttribute("Rune") ~= previous or hoard:GetAttribute("Open") == true end) then success = false; break end
                 turns = turns + 1
@@ -2326,7 +2328,7 @@ end
             local deadline = os.clock() + 2
             repeat task.wait(0.05) until not jobValid(job) or hoard:GetAttribute("Open") == true or os.clock() >= deadline
         end
-        report(hoard:GetAttribute("Open") == true and "Kiste geöffnet · vom Server bestätigt" or "Kiste noch nicht bestätigt · neuer Versuch nach weiterem Abbau")
+        report(hoard:GetAttribute("Open") == true and "Chest opened · server confirmed" or "Chest not confirmed · retrying after more trees are cleared")
         controller.retry[hoard] = os.clock() + 8
         finishJob(job)
         return true
@@ -2349,7 +2351,7 @@ end
         if not prompt or not prompt.Enabled or (controller.retry[prompt] or 0) > os.clock() then return false end
         local job = beginJob("AutoFinishRun")
         if not job then return false end
-        report("Run abschließen · Businessman ansprechen")
+        report("Finishing run · talking to Businessman")
         local previous = workspace:GetAttribute("CashOutAt")
         usePrompt(job, prompt, function() return controller.ended or workspace:GetAttribute("CashOutAt") ~= previous end)
         controller.retry[prompt] = os.clock() + 8
@@ -2358,10 +2360,10 @@ end
     end
     local function returnToLobby(chop, places, eventComplete, ravensOnly)
         if not controller.queueAvailable then
-            report("Auto-Run benötigt Executor-Unterstützung für Teleport-Neustarts"); return
+            report("Auto Runs requires executor support for teleport reloads"); return
         end
-        if controller.returning then report("Rückkehr zur Lobby läuft"); return end
-        if controller.returnAttempts >= 3 then report("Lobby-Teleport nicht bestätigt · Automatik aus- und einschalten für neuen Versuch"); return end
+        if controller.returning then report("Returning to lobby"); return end
+        if controller.returnAttempts >= 3 then report("Lobby teleport not confirmed · toggle automation off and on to retry"); return end
         if os.clock() < controller.returnAt then return end
         local remote = chop and chop:FindFirstChild("ReturnToLobby")
         if not eventComplete and (not remote or not remote:IsA("RemoteEvent")) then return end
@@ -2378,16 +2380,16 @@ end
             controller.departing = false
             return
         end
-        report(ravensOnly and "12 Raben bestätigt · zur Lobby und denselben Run rejoinen"
-            or eventComplete and "12 Raben und Kiste bestätigt · zurück zur Lobby für nächsten Run"
-            or "Run beendet · zurück zur Lobby und neuen Run starten")
+        report(ravensOnly and "12 ravens confirmed · returning to lobby to rejoin this run"
+            or eventComplete and "12 ravens and chest confirmed · returning to lobby for the next run"
+            or "Run complete · returning to lobby for a new run")
         controller.returnAt, controller.returnAttempts = os.clock() + 5, controller.returnAttempts + 1
         if eventComplete then
             -- Normale Client-Teleport-API: Event-Rewards sind bereits bestätigt; kein vorgetäuschter Run-Abschluss.
             local accepted, reason = pcall(function() game:GetService("TeleportService"):Teleport(places.Lobby, player) end)
             if not accepted then
                 if ravensOnly then controller.departing, controller.returning = false, false end
-                report("Lobby-Teleport fehlgeschlagen: " .. tostring(reason))
+                report("Lobby teleport failed: " .. tostring(reason))
             end
         else
             remote:FireServer()
@@ -2418,7 +2420,7 @@ end
         return count >= math.max(12, tonumber(ravens:GetAttribute("Total")) or 12)
     end
     local function ravenRejoinPeers(info, catalog, cycle)
-        if type(info) ~= "table" or type(info.Members) ~= "table" then return nil, "Kein laufender Rejoin-Run verfügbar" end
+        if type(info) ~= "table" or type(info.Members) ~= "table" then return nil, "No active run available to rejoin" end
         local eventWorld
         for _, entry in ipairs(catalog and catalog.Maps or {}) do
             if entry.Key == "WarGod" and entry.Hidden ~= true and (not entry.Ends or entry.Ends > os.time()) then
@@ -2427,7 +2429,7 @@ end
             end
         end
         if not eventWorld or (info.Map ~= eventWorld.Name and info.Map ~= eventWorld.Key) then
-            return nil, "Rejoin-Eintrag gehört nicht zur Frozen-Wilds-Eventwelt"
+            return nil, "Rejoin destination is not Frozen Wilds"
         end
         local peers, matching = {}, not cycle or #cycle.peers == 0
         for _, member in ipairs(info.Members) do
@@ -2439,8 +2441,8 @@ end
                 end
             end
         end
-        if not matching then return nil, "Warte auf den Rejoin-Eintrag des bisherigen Gruppen-Runs" end
-        if #peers == 0 then return nil, "Warte auf einen Mitspieler, der im Run bleibt" end
+        if not matching then return nil, "Waiting for the previous group run to appear in Rejoin" end
+        if #peers == 0 then return nil, "Waiting for a teammate to stay in the run" end
         return peers
     end
     local function ravenRejoinCall(remote, action)
@@ -2464,17 +2466,17 @@ end
         if os.clock() < controller.nextRejoin or os.clock() < controller.launchingUntil then return end
         local pending = controller.ravenCycle
         if pending and pending.phase == "rejoining" and (pending.joinUntil or 0) > os.time() then
-            report("Raben-Rejoin · Beitritt läuft")
+            report("Raven Rejoin · joining")
             return
         end
-        if not controller.queueAvailable then report("Raben-Rejoin benötigt Teleport-Neustarts des Executors"); return end
+        if not controller.queueAvailable then report("Raven Rejoin requires executor support for teleport reloads"); return end
         if player:GetAttribute("Loaded") ~= true or not canAct() then return end
         local remote = remotes and remotes:FindFirstChild("Rejoin")
-        if not remote or not remote:IsA("RemoteFunction") then report("Warte auf den nativen Rejoin-Button"); return end
+        if not remote or not remote:IsA("RemoteFunction") then report("Waiting for Rejoin"); return end
         controller.nextRejoin = os.clock() + 5
         local ok, info = ravenRejoinCall(remote, "Get")
         if not running() or not config.AutoRavenRejoin then return end
-        if not ok then report("Rejoin-Prüfung noch nicht bestätigt · warte"); return end
+        if not ok then report("Waiting for Rejoin confirmation"); return end
         local peers, reason = ravenRejoinPeers(info, data.catalog, controller.ravenCycle)
         if not peers then report(reason); return end
         local cycle = controller.ravenCycle or { peers = peers }
@@ -2485,14 +2487,14 @@ end
             return
         end
         controller.launchingUntil = os.clock() + 20
-        report("Raben-Rejoin · denselben Gruppen-Run über Rejoin betreten")
+        report("Raven Rejoin · joining the same group run")
         local joined, response = ravenRejoinCall(remote, "Go")
         if not running() or not config.AutoRavenRejoin then return end
         if joined and type(response) == "table" and response.Ok then return end
         if joined and type(response) == "table" then cycle.phase, cycle.joinUntil = "lobby", nil end
         controller.launchingUntil = 0
         controller.nextRejoin = os.clock() + 10
-        report("Rejoin noch nicht bestätigt · " .. tostring(type(response) == "table" and response.Why or "neuer Versuch folgt"))
+        report("Rejoin not confirmed · " .. tostring(type(response) == "table" and response.Why or "retrying soon"))
     end
     local function ravenRejoinStep(data, chop, lobbyRemotes)
         if data.lobby then
@@ -2500,18 +2502,18 @@ end
             rejoinRavenRun(data, lobbyRemotes)
             return
         end
-        if not data.chapter or data.chapter.Key ~= "WarGod" then report("Raben-Rejoin wartet auf einen Frozen-Wilds-Gruppen-Run"); return end
-        if controller.ended or playerGui:FindFirstChild("RunEnd") then report("Run beendet · warte auf einen verfügbaren Rejoin-Run"); return end
-        if player:GetAttribute("Loaded") ~= true then report("Raben-Rejoin · warte auf Spielerdaten"); return end
+        if not data.chapter or data.chapter.Key ~= "WarGod" then report("Raven Rejoin needs a Frozen Wilds group run"); return end
+        if controller.ended or playerGui:FindFirstChild("RunEnd") then report("Run ended · waiting for an available Rejoin run"); return end
+        if player:GetAttribute("Loaded") ~= true then report("Raven Rejoin · waiting for player data"); return end
         local wild = workspace:FindFirstChild("FrostWilds")
-        if not wild or not wild:FindFirstChild("Ravens") then report("Raben-Rejoin · warte auf Raben"); return end
+        if not wild or not wild:FindFirstChild("Ravens") then report("Raven Rejoin · waiting for ravens"); return end
         local runKey = workspace:GetAttribute("__RunKey")
-        if type(runKey) ~= "string" or runKey == "" then report("Raben-Rejoin · warte auf Run-Kennung"); return end
+        if type(runKey) ~= "string" or runKey == "" then report("Raven Rejoin · waiting for run ID"); return end
         local cycle = controller.ravenCycle
-        if cycle and cycle.runKey and cycle.runKey ~= runKey then report("Raben-Rejoin pausiert · anderer Run erkannt"); return end
+        if cycle and cycle.runKey and cycle.runKey ~= runKey then report("Raven Rejoin paused · different run detected"); return end
         local peers = {}
         for _, peer in ipairs(Players:GetPlayers()) do if peer ~= player then table.insert(peers, peer.UserId) end end
-        if #peers == 0 then report("Raben-Rejoin · ein Mitspieler muss im Run bleiben"); return end
+        if #peers == 0 then report("Raven Rejoin · a teammate must stay in the run"); return end
         if not cycle then cycle = { phase = "collect", runKey = runKey, peers = peers }; controller.ravenCycle = cycle end
         cycle.runKey, cycle.peers = runKey, peers
         if cycle.phase == "rejoining" then
@@ -2521,7 +2523,7 @@ end
                 return type(encoded) == "string" and HttpService:JSONDecode(encoded)
             end)
             if not ready or type(values) ~= "table" or ravensComplete(wild) then
-                report("Raben-Rejoin · warte auf neuen bestätigten Raben-Sammelstand")
+                report("Raven Rejoin · waiting for the raven count to reset")
                 return
             end
             cycle.phase, cycle.joinUntil = "collect", nil
@@ -2534,7 +2536,7 @@ end
         end
         if not canAct() then return end
         if collectRaven(wild, data.chapter, "AutoRavenRejoin") then return end
-        report("Raben-Rejoin · warte auf fehlende Raben in freigeschalteten Areas")
+        report("Raven Rejoin · waiting for uncollected ravens in unlocked areas")
     end
     local function freePad(pad)
         if not pad:IsA("Model") then return false end
@@ -2555,25 +2557,25 @@ end
     local function launchRun(data, remotes)
         if os.clock() < controller.nextLaunch or os.clock() < controller.launchingUntil then return end
         if not controller.queueAvailable then
-            report("Auto-Run benötigt Executor-Unterstützung für Teleport-Neustarts"); return
+            report("Auto Runs requires executor support for teleport reloads"); return
         end
-        if player:GetAttribute("Loaded") ~= true or not data.catalog then report("Lobby · warte auf Spielerdaten"); return end
+        if player:GetAttribute("Loaded") ~= true or not data.catalog then report("Lobby · waiting for player data"); return end
         local selected, difficulty
         for _, entry in ipairs(data.catalog.Maps or {}) do if entry.Key == config.RunDestination then selected = entry; break end end
         for _, entry in ipairs(data.catalog.Difficulties or {}) do if entry.Name == config.RunDifficulty then difficulty = entry; break end end
         local wins = tonumber(player:GetAttribute("Wins")) or 0
-        if not selected or selected.Hidden == true or selected.Ends and selected.Ends <= os.time() then report("Gewählte Welt ist nicht mehr verfügbar"); return end
-        if not difficulty or wins < (selected.Wins or 0) or wins < (difficulty.Wins or 0) then report("Welt oder Schwierigkeit noch nicht freigeschaltet"); return end
+        if not selected or selected.Hidden == true or selected.Ends and selected.Ends <= os.time() then report("Selected world is no longer available"); return end
+        if not difficulty or wins < (selected.Wins or 0) or wins < (difficulty.Wins or 0) then report("World or difficulty is locked"); return end
         local lobby = workspace:FindFirstChild("Lobby")
         local pads = lobby and lobby:FindFirstChild("LobbyPads")
         local _, root = aliveCharacter()
-        if not pads or not root or not remotes then report("Lobby · warte auf Startpads"); return end
+        if not pads or not root or not remotes then report("Lobby · waiting for start pads"); return end
         local party = player:GetAttribute("PartyPad")
         local pad = type(party) == "string" and pads:FindFirstChild(party) or nil
         if pad then
-            if tonumber(pad:GetAttribute("Host")) ~= player.UserId then report("Andere Party aktiv · automatischer Start wartet"); return end
+            if tonumber(pad:GetAttribute("Host")) ~= player.UserId then report("Another party is active · waiting to start"); return end
             local status = pad:GetAttribute("Status")
-            if status ~= nil and status ~= "Idle" and controller.openPad ~= pad.Name then report("Eigene Party · warte auf Start"); return end
+            if status ~= nil and status ~= "Idle" and controller.openPad ~= pad.Name then report("Party ready · waiting to start"); return end
         else
             local distance = math.huge
             for _, candidate in ipairs(pads:GetChildren()) do
@@ -2583,10 +2585,10 @@ end
                 end
             end
         end
-        if not pad then report("Lobby · warte auf ein freies Startpad"); return end
+        if not pad then report("Lobby · waiting for a free start pad"); return end
         local job = beginJob("AutoRepeatRun")
         if not job then return end
-        report("Lobby · Solo-Run starten: " .. selected.Name .. " · " .. difficulty.Name)
+        report("Lobby · starting solo run: " .. selected.Name .. " · " .. difficulty.Name)
         if controller.openPad ~= pad.Name then
             if not move(job, pad:GetPivot().Position + Vector3.new(0, 3, 0), 1) then finishJob(job); return end
             local deadline = os.clock() + 5
@@ -2616,10 +2618,10 @@ end
         local success, response = result.success, result.response
         if success and type(response) == "table" and response.Ok then
             controller.launchingUntil = os.clock() + 30
-            report("Solo-Run erstellt · warte auf Teleport")
+            report("Solo run created · waiting for teleport")
         else
-            report("Run-Start abgelehnt · " .. tostring(type(response) == "table" and (response.Message or response.Error) or response))
-            if not result.done then controller.launchingUntil = os.clock() + 30; report("Run-Start noch nicht bestätigt · warte auf Server oder Teleport") end
+            report("Run start rejected · " .. tostring(type(response) == "table" and (response.Message or response.Error) or response))
+            if not result.done then controller.launchingUntil = os.clock() + 30; report("Run start not confirmed · waiting for server or teleport") end
         end
         finishJob(job)
     end
@@ -2627,7 +2629,7 @@ end
         local chop, lobbyRemotes = bindRemotes()
         if state.configLoading then return end
         local data = rules()
-        if not data then report("Warte auf Welt- und Run-Daten"); return end
+        if not data then report("Waiting for world and run data"); return end
         controller.inLobby = data.lobby
         if config.AutoRavenRejoin then
             ravenRejoinStep(data, chop, lobbyRemotes)
@@ -2635,12 +2637,12 @@ end
         end
         if data.lobby then
             controller.ended = false
-            if config.AutoRepeatRun then launchRun(data, lobbyRemotes) else report("Lobby · automatischer Run-Start ausgeschaltet") end
+            if config.AutoRepeatRun then launchRun(data, lobbyRemotes) else report("Lobby · Auto Runs off") end
             return
         end
         if playerGui:FindFirstChild("RunEnd") then controller.ended = true end
         if controller.ended then
-            if config.AutoRepeatRun then returnToLobby(chop, data.chopping.Places, false) else report("Run beendet · automatische Wiederholung ausgeschaltet") end
+            if config.AutoRepeatRun then returnToLobby(chop, data.chopping.Places, false) else report("Run complete · Auto Repeat off") end
             return
         end
         local wild = workspace:FindFirstChild("FrostWilds")
@@ -2656,7 +2658,7 @@ end
             if config.AutoHoard and solveHoard(wild, data.chapter) then return end
         end
         if config.AutoFinishRun and finishRun(data.chapter, data.chopping) then return end
-        if not config.AutoRavens and not config.AutoHoard and not config.AutoFinishRun then report("Bereit · Run- und Event-Automatik ausgeschaltet") end
+        if not config.AutoRavens and not config.AutoHoard and not config.AutoFinishRun then report("Ready · run and event automation off") end
         for object in pairs(controller.retry) do if not object:IsDescendantOf(workspace) then controller.retry[object] = nil end end
     end
     function controller.restore(payload)
@@ -2705,24 +2707,24 @@ end
         local event = window:CreateTab({ name = "Event" })
         event:CreateSection({ name = "Frozen Wilds · Shards" })
         for _, feature in ipairs({
-            { key = "AutoRavens", name = "Raben automatisch einsammeln", hint = "Besucht noch fehlende Raben in freigeschalteten Areas und wartet auf die bestätigte RavensFound-Liste. Unabhängig vom Autofarm." },
-            { key = "AutoHoard", name = "Säulenrätsel automatisch lösen", hint = "Autofarm priorisiert die sechs markierten Bäume um Runestone 6, sobald Area 6 freigeschaltet ist. Nach dessen Aktivierung: Zielsymbole lesen, Säulen drehen und Kistenöffnung bestätigen." },
+            { key = "AutoRavens", name = "Auto Collect Ravens", hint = "Collects missing ravens in unlocked areas and confirms each find. Runs independently of Auto Farm." },
+            { key = "AutoHoard", name = "Auto Solve Pillar Puzzle", hint = "Auto Farm clears the six marked trees around Runestone 6 once Area 6 is unlocked. When it lights up, matches the pillar symbols and opens the chest." },
         }) do
             local key = feature.key
             state.controls[key] = event:CreateToggle({ name = feature.name, description = feature.hint,
                 value = config[key], flag = "Setting_" .. key,
                 callback = function(value) commitBoolean(key, value) end })
         end
-        event:CreateSection({ name = "Raben-Rejoin · Gruppen-Run" })
+        event:CreateSection({ name = "Raven Rejoin · Group Run" })
         state.controls.AutoRavenRejoin = event:CreateToggle({
-            name = "Raben per Rejoin wiederholen", value = config.AutoRavenRejoin, flag = "Setting_AutoRavenRejoin",
-            description = "Nur Raben per Sofort-Teleport: nach 12 bestätigten Funden zur Lobby und über Rejoin in denselben Gruppen-Run. Ein Mitspieler muss im Run bleiben. Farm, Bosskampf, Sammeln, Verkauf und Upgrades pausieren; es wird kein neuer Run erstellt.",
+            name = "Raven Rejoin Loop", value = config.AutoRavenRejoin, flag = "Setting_AutoRavenRejoin",
+            description = "Instantly collects all 12 ravens, then returns to the lobby and rejoins the same group run. A teammate must stay behind. Pauses all other automation.",
             callback = function(value) commitBoolean("AutoRavenRejoin", value) end,
         })
-        tab:CreateSection({ name = "Run-Abschluss & Wiederholung" })
+        tab:CreateSection({ name = "Run Completion & Replay" })
         state.controls.AutoFinishRun = tab:CreateToggle({
-            name = "Run automatisch abschließen", value = config.AutoFinishRun, flag = "Setting_AutoFinishRun",
-            description = "Spricht nach vollständig geräumten Chapter-Areas und beendetem Bosskampf den Businessman an. Event-Bosse behalten ihren eigenen Abschluss.",
+            name = "Auto Finish Run", value = config.AutoFinishRun, flag = "Setting_AutoFinishRun",
+            description = "Talks to Businessman after all chapter areas and bosses are cleared. Event bosses use their own completion flow.",
             callback = function(value) commitBoolean("AutoFinishRun", value) end,
         })
         local worlds, difficulties, worldKeys = controller.catalogOptions()
@@ -2733,23 +2735,23 @@ end
             if state.configLoading then state.configPending[key] = value else config[key] = value; controller.cancel() end
         end
         state.controls.RunDestination = tab:CreateDropdown({
-            name = "Welt für neue Runs", options = worlds,
+            name = "Run World", options = worlds,
             value = { controller.displaySetting("RunDestination", config.RunDestination) },
-            flag = "Setting_RunDestination", description = "Erstellt einen neuen Solo-Run in der ausgewählten verfügbaren Welt. Freischaltungen und Event-Endzeiten werden geprüft.",
+            flag = "Setting_RunDestination", description = "Starts a solo run in the selected world. Checks unlocks and event availability.",
             callback = function(value) choice("RunDestination", value) end,
         })
         state.controls.RunDifficulty = tab:CreateDropdown({
-            name = "Schwierigkeit", options = difficulties, value = { config.RunDifficulty },
+            name = "Difficulty", options = difficulties, value = { config.RunDifficulty },
             flag = "Setting_RunDifficulty", callback = function(value) choice("RunDifficulty", value) end,
         })
         state.controls.RunPeaceful = tab:CreateToggle({
-            name = "Neue Runs friedlich starten", value = config.RunPeaceful, flag = "Setting_RunPeaceful",
-            description = "Wird nur gesetzt, wenn die gewählte Welt den Friedlich-Modus unterstützt.",
+            name = "Start Peaceful Runs", value = config.RunPeaceful, flag = "Setting_RunPeaceful",
+            description = "Applies only to worlds that support Peaceful mode.",
             callback = function(value) commitBoolean("RunPeaceful", value) end,
         })
         state.controls.AutoRepeatRun = tab:CreateToggle({
-            name = "Runs automatisch wiederholen", value = config.AutoRepeatRun, flag = "Setting_AutoRepeatRun",
-            description = "Chapter: nach RunEnded zur Lobby. Frozen Wilds: sobald alle 12 Raben und die Kiste bestätigt sind. Danach neuen Solo-Run starten; aktuelle Farm-/Sammel-/Boss-Schalter werden übernommen.",
+            name = "Auto Repeat Runs", value = config.AutoRepeatRun, flag = "Setting_AutoRepeatRun",
+            description = "Starts a new solo run after chapter completion, or after all 12 ravens and the chest in Frozen Wilds. Keeps current farm, collection, and boss settings.",
             callback = function(value) commitBoolean("AutoRepeatRun", value) end,
         })
         return tab
@@ -2761,7 +2763,7 @@ end
                 local ok, message = xpcall(controller.step, function(reason) return debug.traceback(tostring(reason), 2) end)
                 if not ok and running() then
                     controller.cancel()
-                    report("Run-Automatik wartet · Details in der Konsole")
+                    report("Auto Runs paused · see console")
                     warn("[ForestControl Runs] " .. tostring(message))
                     task.wait(3)
                 end
@@ -2777,13 +2779,13 @@ local function createConfigManager(window)
     local HttpService = game:GetService("HttpService")
     local META_FILE = "ForestControl/ConfigLoader.json"
     local tab = window.rfSettings
-    assert(tab and type(tab.CreateDropdown) == "function", "Native Sirius-Einstellungen nicht verfügbar")
+    assert(tab and type(tab.CreateDropdown) == "function", "Sirius settings unavailable")
     local nativeSave, nativeLoad, nativeDelete = window.Save, window.Load, window.DeleteConfig
     local manager = {
-        alive = true, syncing = false, busy = false, name = "Meine Config", selected = nil,
-        meta = { version = 1, autoEnabled = false, autoName = "", lastName = "Meine Config", themes = {} :: { [string]: string } },
+        alive = true, syncing = false, busy = false, name = "My Config", selected = nil,
+        meta = { version = 1, autoEnabled = false, autoName = "", lastName = "My Config", themes = {} :: { [string]: string } },
         controls = {} :: { [string]: any },
-        offLabel = "Aus",
+        offLabel = "Off",
     }
     state.configManager = manager
     if type(readfile) == "function" then
@@ -2805,30 +2807,30 @@ local function createConfigManager(window)
         end
     end
     local function report(message)
-        if manager.alive and isAlive() and message:sub(1, 7) == "Fehler:" then
+        if manager.alive and isAlive() and message:sub(1, 7) == "Error: " then
             window:Notify({ title = "Config", content = message })
         end
     end
     local function cleanName(value)
-        assert(type(value) == "string", "Config-Namen eingeben")
+        assert(type(value) == "string", "Enter a config name")
         local name = value:match("^%s*(.-)%s*$")
-        assert(#name > 0 and #name <= 64 and name ~= "." and name ~= "..", "Config-Name: 1 bis 64 Zeichen")
-        assert(not name:find('[<>:"/\\|?*%c]') and name:sub(-1) ~= ".", "Config-Name enthält ungültige Dateizeichen")
+        assert(#name > 0 and #name <= 64 and name ~= "." and name ~= "..", "Config name must be 1–64 characters")
+        assert(not name:find('[<>:"/\\|?*%c]') and name:sub(-1) ~= ".", "Config name contains invalid filename characters")
         return name
     end
     local function persistMeta()
-        assert(type(writefile) == "function" and type(makefolder) == "function", "Executor unterstützt kein lokales Speichern")
+        assert(type(writefile) == "function" and type(makefolder) == "function", "Executor does not support local saving")
         pcall(makefolder, "ForestControl")
         writefile(META_FILE, HttpService:JSONEncode(manager.meta))
     end
     local function action(callback)
-        if not manager.alive or not isAlive() then return false, "UI beendet" end
-        if manager.busy then return false, "Eine Config-Aktion läuft bereits" end
+        if not manager.alive or not isAlive() then return false, "UI closed" end
+        if manager.busy then return false, "A config operation is already running" end
         manager.busy = true
         local succeeded, message = pcall(callback)
         manager.busy = false
         local text = succeeded and tostring(message) or (tostring(message):gsub("^.-:%d+: ", ""))
-        report(succeeded and text or "Fehler: " .. text)
+        report(succeeded and text or "Error: " .. text)
         return succeeded, text
     end
     function manager.refresh()
@@ -2836,8 +2838,8 @@ local function createConfigManager(window)
         if type(names) ~= "table" then names = {} end
         table.sort(names)
         if not table.find(names, manager.selected) then manager.selected = names[1] end
-        manager.offLabel = "Aus"
-        while table.find(names, manager.offLabel) do manager.offLabel = manager.offLabel .. " (deaktiviert)" end
+        manager.offLabel = "Off"
+        while table.find(names, manager.offLabel) do manager.offLabel = manager.offLabel .. " (disabled)" end
         if manager.meta.autoEnabled and not table.find(names, manager.meta.autoName) then
             manager.meta.autoEnabled = false
             manager.meta.autoName = ""
@@ -2901,7 +2903,7 @@ local function createConfigManager(window)
     local function pause()
         if state.upgradeController then state.upgradeController.cancel() end
         if state.runController then state.runController.cancel() end
-        state.cancelSell("Configwechsel · zurückgekehrt")
+        state.cancelSell("Config changed · returned")
         state.setEnabled(false)
         state.setAutoCollect(false)
         state.setAutoSell(false)
@@ -2914,65 +2916,65 @@ local function createConfigManager(window)
         local candidate = table.clone(config)
         for key, raw in pairs(values) do
             if type(candidate[key]) == "boolean" then
-                assert(type(raw) == "boolean", "Ungültiger Schalter: " .. key)
+                assert(type(raw) == "boolean", "Invalid toggle: " .. key)
                 candidate[key] = raw
             elseif type(candidate[key]) == "string" then
-                assert(state.runController and state.runController.validateSetting(key, raw), "Ungültige Run-Auswahl: " .. key)
+                assert(state.runController and state.runController.validateSetting(key, raw), "Invalid run selection: " .. key)
                 candidate[key] = raw
             else
                 local descriptor = descriptorByKey[key]
-                assert(descriptor, "Unbekannte Einstellung: " .. tostring(key))
+                assert(descriptor, "Unknown setting: " .. tostring(key))
                 local value = tonumber((tostring(raw):gsub(",", ".")))
-                assert(value and value == value and math.abs(value) < math.huge, "Ungültige Zahl: " .. key)
+                assert(value and value == value and math.abs(value) < math.huge, "Invalid number: " .. key)
                 if key == "CollectRadius" then value = clampLogCollectRadius(value) end
-                assert(value >= descriptor.Min and (not descriptor.Max or value <= descriptor.Max), "Wert außerhalb des Bereichs: " .. key)
-                assert(not descriptor.Integer or value % 1 == 0, "Ganze Zahl nötig: " .. key)
+                assert(value >= descriptor.Min and (not descriptor.Max or value <= descriptor.Max), "Value out of range: " .. key)
+                assert(not descriptor.Integer or value % 1 == 0, "Whole number required: " .. key)
                 candidate[key] = value
             end
         end
-        assert(candidate.MinTweenTime <= candidate.MaxTweenTime, "Minimale Tween-Zeit übersteigt die maximale")
+        assert(candidate.MinTweenTime <= candidate.MaxTweenTime, "Minimum tween time exceeds maximum")
         candidate.MaxChopDistance = math.max(TREE_DISTANCE, candidate.MaxChopDistance)
         return candidate
     end
     function manager.save(name)
         return action(function()
-            assert(not state.sellBusy, "Den laufenden Verkauf kurz abwarten")
+            assert(not state.sellBusy, "Wait for the current sale to finish")
             local target = cleanName(name or window.configuration.fileName or "Default")
             if name ~= nil then name = target end
             syncSettings()
             local values = snapshot()
-            assert(nativeSave(window, name), "Config konnte nicht lokal gespeichert werden")
+            assert(nativeSave(window, name), "Could not save config locally")
             if values.theme then manager.meta.themes[target] = values.theme end
             manager.name = target
             manager.selected = target
             manager.meta.lastName = target
             persistMeta()
             manager.refresh()
-            return "Config gespeichert: " .. target
+            return "Config saved: " .. target
         end)
     end
     function manager.load(name)
         return action(function()
             local target = cleanName(name or window.configuration.fileName or "Default")
             if name ~= nil then name = target end
-            assert(table.find(manager.refresh(), target), "Config nicht gefunden: " .. target)
+            assert(table.find(manager.refresh(), target), "Config not found: " .. target)
             local before = snapshot()
             pause()
             state.configPending = {}
             state.pendingModes = {}
             state.configLoading = true
             local loaded, result = pcall(function()
-                assert(nativeLoad(window, name), "Config konnte nicht gelesen werden")
+                assert(nativeLoad(window, name), "Could not read config")
                 task.wait()
-                assert(manager.alive and isAlive(), "UI während des Ladens beendet")
+                assert(manager.alive and isAlive(), "UI closed while loading")
                 local candidate = validateSettings(state.configPending)
-                assert(not (state.pendingModes.FarmEnabled and state.pendingModes.PlayerFly), "Config aktiviert gleichzeitig Fly und Autofarm")
+                assert(not (state.pendingModes.FarmEnabled and state.pendingModes.PlayerFly), "Config enables both Fly and Auto Farm")
                 local theme = manager.meta.themes[target]
                 if theme and state.themeStudio then state.themeStudio.importJSON(theme) end
                 return candidate
             end)
             state.configLoading = false
-            if not manager.alive or not isAlive() then error("UI während des Ladens beendet") end
+            if not manager.alive or not isAlive() then error("UI closed while loading") end
             if not loaded then
                 for key, value in pairs(before.settings) do config[key] = value end
                 syncSettings()
@@ -2988,13 +2990,13 @@ local function createConfigManager(window)
             manager.selected = target
             if manager.controls.NativeSelection then manager.controls.NativeSelection:Set(target) end
             manager.refresh()
-            return "Config geladen: " .. target
+            return "Config loaded: " .. target
         end)
     end
     function manager.setAuto(enabled, name)
         return action(function()
             local selected = name ~= nil and cleanName(name) or manager.meta.autoName
-            if enabled then assert(table.find(manager.refresh(), selected), "Zuerst eine vorhandene Auto-Config auswählen") end
+            if enabled then assert(table.find(manager.refresh(), selected), "Select an existing config first") end
             local previousEnabled, previousName = manager.meta.autoEnabled, manager.meta.autoName
             manager.meta.autoEnabled = enabled == true
             manager.meta.autoName = selected
@@ -3005,7 +3007,7 @@ local function createConfigManager(window)
                 error(message)
             end
             manager.refresh()
-            return enabled and ("Beim Start automatisch laden: " .. selected) or "Auto-Config-Loader ausgeschaltet"
+            return enabled and ("Load on startup: " .. selected) or "Auto Load off"
         end)
     end
     function manager.start()
@@ -3013,7 +3015,7 @@ local function createConfigManager(window)
         if manager.meta.autoEnabled then
             return manager.load(manager.meta.autoName)
         end
-        report("Bereit · Configs werden lokal gespeichert")
+        report("Ready · configs are saved locally")
         return true
     end
     function manager.destroy()
@@ -3022,7 +3024,7 @@ local function createConfigManager(window)
     function manager.delete(name)
         return action(function()
             name = cleanName(name)
-            assert(nativeDelete(window, name), "Config konnte nicht gelöscht werden")
+            assert(nativeDelete(window, name), "Could not delete config")
             manager.meta.themes[name] = nil
             if manager.meta.autoName == name then
                 manager.meta.autoEnabled = false
@@ -3030,7 +3032,7 @@ local function createConfigManager(window)
             end
             persistMeta()
             manager.refresh()
-            return "Config gelöscht: " .. name
+            return "Config deleted: " .. name
         end)
     end
     for _, element in ipairs(tab.elements) do
@@ -3038,8 +3040,8 @@ local function createConfigManager(window)
     end
     manager.refresh()
     manager.controls.AutoName = tab:CreateDropdown({
-        name = "Auto-Load", options = { manager.offLabel }, value = { manager.offLabel },
-        description = "Aus oder eine Config auswählen, die beim nächsten Scriptstart geladen wird.",
+        name = "Auto Load", options = { manager.offLabel }, value = { manager.offLabel },
+        description = "Select a config to load on startup, or Off to disable.",
         forgetState = true,
         callback = function(value)
             if manager.syncing or not manager.alive or type(value) ~= "string" then return end
@@ -3092,26 +3094,26 @@ local ok, err = pcall(function()
     local upgradeController = createUpgradeAutomation()
 
     local farm = window:CreateTab({ name = "Farm" })
-    local movement = window:CreateTab({ name = "Bewegung" })
-    local chopping = window:CreateTab({ name = "Abbau" })
-    local collection = window:CreateTab({ name = "Sammeln" })
-    local selling = window:CreateTab({ name = "Verkaufen" })
+    local movement = window:CreateTab({ name = "Movement" })
+    local chopping = window:CreateTab({ name = "Chopping" })
+    local collection = window:CreateTab({ name = "Collection" })
+    local selling = window:CreateTab({ name = "Selling" })
     runController.createTab(window)
     upgradeController.createTab(window)
     createPlayerTab(window)
     local tabs = { Movement = movement, Chopping = chopping, Collection = collection, Selling = selling }
 
     state.controls.AutoSell = selling:CreateToggle({
-        name = "Auto-Sell", value = false, flag = "SellEnabled",
-        description = "Ab der Holzmenge oder bei vollem Rucksack per schnellem Tween zum nächsten freigeschalteten Verkaufspunkt und zurück.",
+        name = "Auto Sell", value = false, flag = "SellEnabled",
+        description = "Sells at the log threshold or when your backpack is full. Travels to the nearest unlocked sell pad and returns.",
         callback = function(value)
             if not syncing and isAlive() then state.setAutoSell(value) end
         end,
     })
     state.controls.AutoDetectBackpackCapacity = selling:CreateToggle({
-        name = "Auto Detect Backpack Capacity", value = config.AutoDetectBackpackCapacity,
+        name = "Use Backpack Capacity", value = config.AutoDetectBackpackCapacity,
         flag = "Setting_AutoDetectBackpackCapacity",
-        description = "Verkauft automatisch bei vollem Rucksack und berücksichtigt dessen aktuelle Kapazität. Ein unendlicher Rucksack wird nie voll.",
+        description = "Sells when your current backpack is full. Infinite backpacks never trigger a sale.",
         callback = function(value) commitBoolean("AutoDetectBackpackCapacity", value) end,
     })
     state.controls.SellThreshold = selling:CreateInput({
@@ -3121,8 +3123,8 @@ local ok, err = pcall(function()
     })
     syncSellCapacityUI()
     state.controls.ManualSell = selling:CreateButton({
-        name = "Jetzt Holz verkaufen",
-        description = "Per schnellem Tween zum Pad, einmal Holz abgeben, dort 1 Sekunde bleiben und zurück; unabhängig vom Auto-Sell-Toggle.",
+        name = "Sell Logs Now",
+        description = "Travels to a sell pad, deposits logs, waits 1 second, and returns. Works independently of Auto Sell.",
         callback = function()
             if not isAlive() then return end
             local accepted, message = state.requestSell("manual")
@@ -3130,17 +3132,17 @@ local ok, err = pcall(function()
         end,
     })
     selling:CreateButton({
-        name = "Verkauf abbrechen & zurück",
+        name = "Cancel Sale & Return",
         callback = function()
-            if state.cancelSell then state.cancelSell("Abgebrochen · zurückgekehrt") end
+            if state.cancelSell then state.cancelSell("Cancelled · returned") end
         end,
     })
-    sellStatus = selling:CreateText({ name = "Verkaufsstatus", text = "Auto-Sell aus · manueller Verkauf bereit" })
+    sellStatus = selling:CreateText({ name = "Sale Status", text = "Auto Sell off · manual sell ready" })
 
     syncing = true
     state.controls.Main = farm:CreateToggle({
-        name = "Autofarm",
-        description = "Startet oder pausiert den Autofarm für alle Baumarten mit automatischer Werkzeug- und Klassenerkennung und Restfeuerschaden. Auto-Collect bleibt unabhängig.",
+        name = "Auto Farm",
+        description = "Farms all tree types using detected tools, class weapons, and remaining burn damage. Auto Collect runs independently.",
         value = false,
         flag = "FarmEnabled",
         callback = function(value)
@@ -3148,27 +3150,27 @@ local ok, err = pcall(function()
         end,
     })
     state.controls.ChainsawToolSwitch = farm:CreateToggle({
-        name = "Kettensäge ↔ bestes Werkzeug",
-        description = string.format("An: Kettensäge und Ersatzwerkzeug wechseln bei 85 %% Hitze; zurück bei %.0f %%. Aus: bestes Ersatzwerkzeug ohne Kettensäge.", SAW_RETURN_HEAT * 100),
+        name = "Chainsaw & Backup Swap",
+        description = string.format("On: swaps at 85 %% heat and returns to the Chainsaw at %.0f %%. Off: uses the best non-Chainsaw tool.", SAW_RETURN_HEAT * 100),
         value = config.ChainsawToolSwitch,
         flag = "Setting_ChainsawToolSwitch",
         callback = function(value) commitBoolean("ChainsawToolSwitch", value) end,
     })
     state.controls.AutoBoss = farm:CreateToggle({
-        name = "Auto-Bossfight", value = config.AutoBoss, flag = "Setting_AutoBoss",
-        description = "Unabhängig vom Autofarm: Guardian mit der besten vorhandenen Waffe bekämpfen, seine Rückseite verfolgen und frontalen Angriffen ausweichen.",
+        name = "Auto Boss Fight", value = config.AutoBoss, flag = "Setting_AutoBoss",
+        description = "Fights Guardians with your best owned weapon, stays behind them, and dodges frontal attacks. Runs independently of Auto Farm.",
         callback = function(value) commitBoolean("AutoBoss", value) end,
     })
-    status = farm:CreateText({ name = "Status", text = "Pausiert · bereit zum Starten" })
+    status = farm:CreateText({ name = "Status", text = "Paused · ready to start" })
     farm:CreateButton({
         name = "Terminate",
-        description = "Autofarm und Auto-Collect vollständig beenden und dieses Fenster entfernen.",
+        description = "Stops all automation and closes this window.",
         callback = state.stop,
     })
 
     state.controls.AutoCollect = collection:CreateToggle({
-        name = "Auto-Collect",
-        description = "Holz, eigene Gems und Shards einsammeln, unabhängig vom Autofarm. Grasp und Tragkapazität gelten für Holz.",
+        name = "Auto Collect",
+        description = "Collects logs and your gem and shard drops independently of Auto Farm. Respects Grasp and backpack capacity.",
         value = false,
         flag = "CollectEnabled",
         callback = function(value)
@@ -3176,21 +3178,21 @@ local ok, err = pcall(function()
         end,
     })
     for _, item in ipairs({
-        { key = "CollectLogs", name = "Holz einsammeln" },
-        { key = "CollectGems", name = "Gems einsammeln" },
-        { key = "CollectShards", name = "Shards einsammeln" },
+        { key = "CollectLogs", name = "Collect Logs" },
+        { key = "CollectGems", name = "Collect Gems" },
+        { key = "CollectShards", name = "Collect Shards" },
     }) do
         local key = item.key
         state.controls[key] = collection:CreateToggle({
             name = item.name, value = config[key], flag = "Setting_" .. key,
-            description = "Wird nur ausgeführt, solange Auto-Collect eingeschaltet ist.",
+            description = "Requires Auto Collect.",
             callback = function(value)
                 commitBoolean(key, value)
             end,
         })
     end
 
-    state.controls.CombatStats = chopping:CreateText({ name = "Werkzeug · Live-Werte", text = "Werkzeugdaten werden gelesen …" })
+    state.controls.CombatStats = chopping:CreateText({ name = "Live Tool Stats", text = "Reading tool data…" })
 
     for _, descriptor in ipairs(descriptors) do
         if descriptor.Tab == "Player" or descriptor.Tab == "Selling" then continue end
@@ -3200,7 +3202,7 @@ local ok, err = pcall(function()
             description = descriptor.Description,
             numeric = true,
             value = format(config[key]),
-            placeholder = "Zahl eingeben",
+            placeholder = "Enter a number",
             flag = "Setting_" .. key,
             callback = function(value) commit(key, value) end,
         })
@@ -3216,7 +3218,7 @@ end)
 
 if not ok then
     state.stop()
-    warn("[ForestControl Gen2] UI konnte nicht geladen werden: " .. tostring(err))
+    warn("[ForestControl Gen2] Could not load UI: " .. tostring(err))
     return
 end
 if not isAlive() then return end
@@ -3486,7 +3488,7 @@ local function fistsProfile(tree, preview)
     if not positive(scale) or not positive(damage) or not positive(timing.Windup)
         or not positive(timing.Strike) or not positive(timing.Recover) then return nil end
     return {
-        tool = "Fists", label = "Fäuste", damage = damage, scale = scale, side = side,
+        tool = "Fists", label = "Fists", damage = damage, scale = scale, side = side,
         minInterval = tool.Interval or 0,
         windup = (timing.Windup + timing.Strike) * scale,
         recover = timing.Recover * timing.ChainAt * scale,
@@ -3539,7 +3541,7 @@ local function sawProfile(tree)
     local damage = api.Damage(player, "Chainsaw", tree and tree:GetAttribute("TreeType"), 1)
     if not positive(damage) or not positive(tool.Interval) or not heatState then return nil end
     return {
-        tool = "Chainsaw", label = "Kettensäge", damage = damage, side = 1,
+        tool = "Chainsaw", label = "Chainsaw", damage = damage, side = 1,
         -- Genau der native Sägetakt. Speed steckt bereits in UpgradeMath.Damage.
         cycle = tool.Interval * 1.02,
         engage = tonumber(tool.Engage) or 0.15, windup = 0, settle = 0.05,
@@ -3695,7 +3697,7 @@ local function genericProfile(tree, name)
     local axeLike = spec.AxeLike or spec.Cuts and not spec.Continuous
     if axeLike then damage = damage * (tonumber(player:GetAttribute("FrostDamage")) or 1) end
     local reach = math.min(spec.Reach or 0, spec.ServerReach or spec.Reach or 0)
-    local family, windup, cycle = "Schlag", nil, nil
+    local family, windup, cycle = "Swing", nil, nil
     local minimumDistance, activeThrow, recover, hitStopMultiplier
     if positive(damage) and not spec.NoSwing and not spec.Continuous then
         local anim
@@ -3712,7 +3714,7 @@ local function genericProfile(tree, name)
         recover = anim.Recover * (heavy.Recover or 1) * (anim.ChainAt or 1) * scale
         hitStopMultiplier = heavy.HitStop or 1
         cycle = windup + recover + (combat.settings.Axe.HitStopFinal or 0) * hitStopMultiplier
-        family = axeLike and "Axtsteuerung" or spec.Slashes and "Kombo-Steuerung" or "Schlagsteuerung"
+        family = axeLike and "Axe Controls" or spec.Slashes and "Combo Controls" or "Melee Controls"
     elseif positive(damage) and clips then
         local clip = clips.clips[comboIndex]
         local length = (spec.Swing or 1) * scale
@@ -3720,12 +3722,12 @@ local function genericProfile(tree, name)
         windup = clip.Strike / speed
         cycle = math.max(length, clip.ChainAt / speed)
         recover = 0
-        family = "Direkter Modul-Treffer"
+        family = "Direct module hit"
     elseif positive(damage) then
         -- Unbekannte Modulformate behalten ihre eigene Zeitsteuerung.
         cycle = math.max(spec.Interval or 0, (spec.Swing or 1) * scale)
         windup = cycle
-        family = spec.Continuous and "Dauerangriff" or "Angriffsmodul"
+        family = spec.Continuous and "Continuous Attack" or "Attack Module"
     elseif module and type(module.TryThrow) == "function" and positive(timing.ThrowRange or 0) then
         activeThrow = true
         reach = timing.ThrowRange
@@ -3733,14 +3735,14 @@ local function genericProfile(tree, name)
         cycle = (timing.Cooldown or 1) * api.Scale(player, "Cooldown", name)
         windup = (timing.Release or 0.25) + (timing.Fuse or 0)
         damage = hp or 1
-        family = "Wurfmodul"
+        family = "Throw Module"
     elseif module and type(module.Step) == "function" and positive(timing.Range or 0)
         and positive(timing.BurnBase or 0) then
         reach = math.min(timing.Range, timing.ServerRange or timing.Range)
         windup = timing.CatchTime or 0.15
         cycle = windup + timing.BurnBase + (timing.BurnPerHP or 0) * (hp or 1)
         damage = hp or 1
-        family = "Brennmodul"
+        family = "Burn Module"
     else
         return nil -- Sammelgeräte ohne Baumangriff sind keine Farmwaffen.
     end
@@ -3836,9 +3838,9 @@ local function startNative(profile, aimFor, valid)
     combat.stopNative()
     local native = combat.axe
     if not native or not native.input or not native.heldIndex or not native.clickIndex or not native.undo then
-        return nil, "Native Eingabesteuerung nicht verfügbar"
+        return nil, "Native input controls unavailable"
     end
-    if native.swing.State ~= "Idle" then return nil, "Warte auf laufende Werkzeuganimation" end
+    if native.swing.State ~= "Idle" then return nil, "Waiting for the tool animation to finish" end
     local bridge = { native = native, tool = profile.tool, lastThrow = -math.huge } :: { [string]: any }
     bridge.wrapper = function(dt)
         if combat.nativeBridge ~= bridge or bridge.error or not valid() then
@@ -3947,7 +3949,7 @@ local function useBestFallback(tree, rememberSaw, heat)
     combat.stopSaw()
     local fallback, score = chooseSawFallback(tree)
     if not fallback then
-        setStatus("Warte auf ein verfügbares Ersatzwerkzeug …")
+        setStatus("Waiting for a backup tool…")
         task.wait(0.1)
         return true
     end
@@ -3957,12 +3959,12 @@ local function useBestFallback(tree, rememberSaw, heat)
         return false
     end
     if os.clock() < combat.sawSwapRetryAt then
-        setStatus("Warte auf nächsten Werkzeugwechsel …")
+        setStatus("Waiting to switch tools…")
         task.wait(0.1)
         return true
     end
     combat.sawSwapRetryAt = os.clock() + 3
-    setStatus("Wechsle zum besten Ersatzwerkzeug · "
+    setStatus("Switching to best backup · "
         .. (combat.settings.Tools[fallback].DisplayName or fallback))
     if requestFarmTool(fallback) then
         if rememberSaw then combat.sawSwap = { fallback = fallback, score = score, at = os.clock() } end
@@ -3988,7 +3990,7 @@ local function updateSawToolChoice(tree)
     end
     local heat = sawHeatState()
     if not heat then
-        setStatus("Warte auf Kettensägen-Hitzedaten …")
+        setStatus("Waiting for Chainsaw heat data…")
         task.wait(0.1)
         return true
     end
@@ -3997,7 +3999,7 @@ local function updateSawToolChoice(tree)
             and os.clock() >= combat.sawSwapRetryAt
             and os.clock() >= (combat.sawSwapRejected.Chainsaw or 0) then
             combat.sawSwapRetryAt = os.clock() + 3
-            setStatus("Kettensäge abgekühlt · wechsle zurück …")
+            setStatus("Chainsaw cooled · switching back…")
             if requestFarmTool("Chainsaw") then
                 combat.lastToolSwap = { from = current, to = "Chainsaw", heat = heat.heat, at = os.clock() }
                 combat.sawSwap = nil
@@ -4020,7 +4022,7 @@ local function updateSawToolChoice(tree)
         return true
     end
     combat.sawSwapRetryAt = os.clock() + 3
-    setStatus("Kettensägen-Wechselmodus · rüste Kettensäge aus …")
+    setStatus("Equipping Chainsaw…")
     if requestFarmTool("Chainsaw") then
         combat.lastToolSwap = { from = current, to = "Chainsaw", heat = heat.heat, at = os.clock() }
     else
@@ -4036,49 +4038,49 @@ local function refreshCombatDisplay()
     local profile = combat.profile()
     local text
     if profile and profile.tool == "Axe" then
-        text = string.format("Axt · Schaden %.3f (Basis %.3f · Frost ×%.2f)\nSharpness %d · Speed %d · Hold %s\nSchlagabstand %.3f s · Treffer nach %.3f s · Reichweite %.1f\nRestpause nach bestätigtem Treffer −8 %%\nLetzter bestätigter HP-Abzug %.3f · Rest-HP %.3f",
+        text = string.format("Axe · Damage %.3f (Base %.3f · Frost ×%.2f)\nSharpness %d · Speed %d · Hold %s\nSwing interval %.3f s · Hit delay %.3f s · Range %.1f\nConfirmed-hit recovery −8 %%\nLast confirmed damage %.3f · Remaining HP %.3f",
             profile.damage, profile.rawDamage, profile.frostDamage, profile.sharpLevel, profile.speedLevel,
-            profile.hold and "freigeschaltet" or "nicht gekauft", profile.cycle, profile.windup, profile.reach,
+            profile.hold and "owned" or "not owned", profile.cycle, profile.windup, profile.reach,
             combat.axeStats.lastDamage, combat.axeStats.lastHP)
     elseif profile and profile.tool == "Fists" then
-        text = string.format("Fäuste · Schaden %.3f · Reichweite %.1f\nSchlagabstand %.3f s · Treffer nach %.3f s\nLetzter bestätigter HP-Abzug %.3f · Rest-HP %.3f",
+        text = string.format("Fists · Damage %.3f · Range %.1f\nSwing interval %.3f s · Hit delay %.3f s\nLast confirmed damage %.3f · Remaining HP %.3f",
             profile.damage, profile.reach, profile.cycle, profile.windup,
             combat.fistsStats.lastDamage, combat.fistsStats.lastHP)
     elseif profile and profile.tool == "Chainsaw" then
-        text = string.format("Kettensäge · Schaden pro Sägetakt %.3f · Reichweite %.1f\nSägetakt %.3f s · Ansetzen %.3f s\nSpeed %d · Cooling %d · Recovery %d\nHitze %.0f %% · %s\nLetzter bestätigter HP-Abzug %.3f · Rest-HP %.3f",
+        text = string.format("Chainsaw · Damage per cut %.3f · Range %.1f\nCut interval %.3f s · Startup %.3f s\nSpeed %d · Cooling %d · Recovery %d\nHeat %.0f %% · %s\nLast confirmed damage %.3f · Remaining HP %.3f",
             profile.damage, profile.reach, profile.cycle, profile.engage,
             profile.speedLevel, profile.coolingLevel, profile.recoveryLevel, profile.heat * 100,
-            profile.locked and string.format("Abkühlen · %.1f s", profile.coolRemaining) or "bereit",
+            profile.locked and string.format("Cooling · %.1f s", profile.coolRemaining) or "ready",
             combat.sawStats.lastDamage, combat.sawStats.lastHP)
     elseif profile and profile.tool ~= "HellChain" then
         local stats = combat.toolStats[profile.tool]
-        text = string.format("%s · %s\nSchaden %.3f · Reichweite %.1f · Klasse %s\n%s\nLetzter bestätigter HP-Abzug %.3f",
-            profile.label, profile.family, profile.damage, profile.reach, profile.class or "Standard",
-            profile.direct and "Direkte Treffer ohne lokale Schlaganimation" or "Native Modulsteuerung", stats and stats.lastDamage or 0)
+        text = string.format("%s · %s\nDamage %.3f · Range %.1f · Class %s\n%s\nLast confirmed damage %.3f",
+            profile.label, profile.family, profile.damage, profile.reach, profile.class or "Default",
+            profile.direct and "Direct hits without local swing animation" or "Native tool controls", stats and stats.lastDamage or 0)
     elseif profile then
-        text = string.format("ChainPower %d · Schaden %.3f · Schlag %.3f s · Treffer nach %.3f s\nZeitkürzung %.1f %% · Ankunftspause %.3f s\nRestpause nach bestätigtem Treffer −%.2f %%\nSchlagreichweite %.1f · Lash %.1f (Spezialfähigkeit)\nFeuer %.1f s / Tick %.2f s · Restschaden aus gespeicherten HP-Ticks",
+        text = string.format("Chain Power %d · Damage %.3f · Swing %.3f s · Hit delay %.3f s\nTiming reduction %.1f %% · Arrival pause %.3f s\nConfirmed-hit recovery −%.2f %%\nHit range %.1f · Lash %.1f (Ability)\nBurn %.1f s / Tick %.2f s · Remaining damage from recorded HP ticks",
             profile.level, profile.damage, profile.cycle, profile.windup,
             (1 - profile.timingFactor) * 100, profile.settle,
             (1 - HELLCHAIN_RECOVERY_FACTOR) * 100,
             profile.reach, profile.lashRange, profile.fireDuration, profile.fireTick)
     elseif player:GetAttribute("Tool") == "Axe" or player:GetAttribute("Tool") == "Fists"
         or player:GetAttribute("Tool") == "Chainsaw" then
-        text = "Warte auf initialisierte Werkzeug- und Animationsdaten …"
+        text = "Waiting for tool and animation data…"
     elseif player:GetAttribute("Tool") == "HellChain" then
-        text = "Warte auf initialisierte HellChain- und Animationsdaten …"
+        text = "Waiting for HellChain and animation data…"
     else
-        text = "Werkzeugautomatik inaktiv · manuelle Abbauwerte gelten"
+        text = "Tool automation inactive · using manual settings"
     end
     if combat.sawSwap then
         local heat = sawHeatState()
-        if heat then text = text .. string.format("\nSäge kühlt im Hintergrund · %.0f %% · Rückwechsel bei %.0f %%", heat.heat * 100, SAW_RETURN_HEAT * 100) end
+        if heat then text = text .. string.format("\nChainsaw cooling · %.0f %% · Swap back at %.0f %%", heat.heat * 100, SAW_RETURN_HEAT * 100) end
     end
     if state.abilityController and ownsFarmTool("Leviathan") then
         local ability = state.abilityController
         local left = ability.cooldownLeft()
-        text = text .. string.format("\nWar-God-Wurf · %s · letzte Serverziele %d",
-            ability.frost.request and "Fähigkeitswechsel" or ability.isFlying() and "Axt unterwegs"
-                or left > 0 and string.format("%.1f s Cooldown", left) or "bereit",
+        text = text .. string.format("\nWar-God Throw · %s · Last confirmed targets %d",
+            ability.frost.request and "switching ability" or ability.isFlying() and "axe in flight"
+                or left > 0 and string.format("%.1f s cooldown", left) or "ready",
             ability.lastFlight and ability.lastFlight.count or 0)
     end
     if state.abilityController then
@@ -4199,7 +4201,7 @@ local function releaseToFire(tree)
         trace.fireRemaining = remaining
         trace.hpAfter = hp
     end
-    setStatus("Brennt voraussichtlich zu Ende · " .. tree.Name)
+    setStatus("Burn damage should finish · " .. tree.Name)
     return true
 end
 
@@ -4211,7 +4213,7 @@ local function calibrateFire(tree, track)
     model.lastProbe = os.clock()
     local deadline = math.min(track.expires,
         track.confirmedAt + track.tick + math.clamp(HIT_CONFIRM_TIMEOUT, 0.1, 0.3))
-    setStatus("Feuertick einmalig messen · " .. tree.Name)
+    setStatus("Measuring burn tick · " .. tree.Name)
     while isRunning() and combat.tracks[tree] == track and not track.tickDamage
         and track.top == tree:FindFirstChild("Top", true) and (treeHP(tree) or 0) > 0
         and os.clock() < deadline do
@@ -4530,7 +4532,7 @@ local function retryTree(tree, recovery, reason)
     recovery.failures = recovery.failures + 1
     recovery.reason = reason
     skippedUntil[tree] = os.clock() + TREE_RETRY_AFTER
-    setStatus(reason .. " · neuer Anlauf in " .. TREE_RETRY_AFTER .. " s")
+    setStatus(reason .. " · retry in " .. TREE_RETRY_AFTER .. " s")
 end
 
 local function resolveWorld()
@@ -4625,7 +4627,7 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
     )
     state.tween = tween
     tween:Play()
-    setStatus("Unterwegs · " .. tree.Name)
+    setStatus("Traveling · " .. tree.Name)
 
     while tween.PlaybackState == Enum.PlaybackState.Playing do
         if not validTarget(tree, character, root, humanoid, revision)
@@ -4657,7 +4659,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
     local initialHP = treeHP(tree)
     if not initialHP then
         skippedUntil[tree] = os.clock() + 1
-        setStatus("Warte auf Baum-HP · " .. tree.Name)
+        setStatus("Waiting for tree HP · " .. tree.Name)
         task.wait(0.1)
         return
     end
@@ -4688,7 +4690,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
             if data and combat.native.visuals.CanChop(data) then return true end
             if os.clock() >= deadline then return false end
             trace.stage = "reconcile"
-            setStatus("Warte auf Server / lokale Fällvorschau · " .. tree.Name)
+            setStatus("Waiting for tree readiness · " .. tree.Name)
             task.wait(0.05)
         end
         return false
@@ -4696,7 +4698,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
     if not position then
-        retryTree(tree, recovery, "Anlauf nicht in Schlagreichweite")
+        retryTree(tree, recovery, "Approach ended outside hit range")
         return
     end
     trace.arrivedAt = os.clock()
@@ -4708,7 +4710,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
     for _ = 1, budget do
         if not valid() or releaseToFire(tree) then return end
         if not waitForNative() then
-            if valid() then retryTree(tree, recovery, "Baumdarstellung noch nicht bereit") end
+            if valid() then retryTree(tree, recovery, "Tree is not ready yet") end
             return
         end
         if not valid() then return end
@@ -4727,7 +4729,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
         position = treePosition(tree)
         local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
         if not position or (root.Position - position).Magnitude > range then
-            retryTree(tree, recovery, "Position vor dem Schlag verlassen")
+            retryTree(tree, recovery, "Moved before the hit")
             return
         end
         local startedAt = os.clock()
@@ -4746,18 +4748,18 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
 
         position = treePosition(tree)
         if not position or (root.Position - position).Magnitude > range then
-            retryTree(tree, recovery, "Position während des Schlags verlassen")
+            retryTree(tree, recovery, "Moved during the hit")
             return
         end
         local aimAt = hitPosition(tree, position)
         if (aimAt - root.Position).Magnitude < 0.01 then
-            retryTree(tree, recovery, "Kein gültiger Zielpunkt am Stamm")
+            retryTree(tree, recovery, "No valid trunk hit point")
             return
         end
         local aim = CFrame.lookAt(root.Position, aimAt)
         local kind, _, target = combat.native.probe(aim)
         if kind ~= "Tree" or not target or target.Tree ~= tree or not isAreaUnlocked(target.Tree) then
-            retryTree(tree, recovery, "Stamm verdeckt · anderer Anlaufwinkel")
+            retryTree(tree, recovery, "Trunk blocked · trying another angle")
             return
         end
         local hpBefore = treeHP(tree)
@@ -4791,11 +4793,11 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
         end)
         trace.stage = "await-server"
         trace.sentAt = now
-        setStatus(string.format("HellChain · %s · %.2f HP · Serverbestätigung", tree.Name, hpBefore))
+        setStatus(string.format("HellChain · %s · %.2f HP · confirming hit", tree.Name, hpBefore))
         local accepted = combat.native.controller.Blow(aim, aim.RightVector, profile.side)
         if not accepted then
             discardFire(tree, track)
-            if valid() then retryTree(tree, recovery, "Lokaler Treffer nicht bereit") end
+            if valid() then retryTree(tree, recovery, "Local hit is not ready") end
             return
         end
         combat.sent = combat.sent + 1
@@ -4827,7 +4829,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
             -- Die lokale Vorschau wird vom Spiel nach ca. 2 s zurückgesetzt.
             -- Der nächste Besuch wartet darauf; kein weiterer Swing gegen diese Vorschau.
             trace.stage = "unconfirmed"
-            retryTree(tree, recovery, "Treffer nicht vom Server bestätigt")
+            retryTree(tree, recovery, "Hit not confirmed by server")
             return
         end
         if not valid() then
@@ -4835,13 +4837,13 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
             return
         end
     end
-    if valid() then retryTree(tree, recovery, "Baum benötigt einen weiteren Anlauf") end
+    if valid() then retryTree(tree, recovery, "Tree needs another attempt") end
 end
 
 local function automaticAxeTree(tree, character, root, humanoid, revision, initialProfile)
     local profile = initialProfile
     local toolName = profile.tool
-    local label = profile.label or (toolName == "Fists" and "Fäuste" or "Axt")
+    local label = profile.label or (toolName == "Fists" and "Fists" or "Axe")
     local stats: { [string]: any }
     if toolName == "Fists" then stats = combat.fistsStats
     elseif toolName == "Axe" then stats = combat.axeStats
@@ -4875,7 +4877,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
     if not position then
-        retryTree(tree, recovery, label .. " nicht in Schlagreichweite")
+        retryTree(tree, recovery, label .. " outside hit range")
         return
     end
     trace.arrivedAt = os.clock()
@@ -4895,7 +4897,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             if native.ready(toolName) and native.swing.State == "Idle" and data
                 and native.visuals.CanChop(data) then break end
             if os.clock() >= readyBy then
-                retryTree(tree, recovery, label .. " · warte auf lokale Fällvorschau")
+                retryTree(tree, recovery, label .. " · waiting for tree readiness")
                 return
             end
             task.wait()
@@ -4904,7 +4906,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         profile = getProfile(tree)
         if not profile then return end
         while valid() and profile.heatLocked do
-            setStatus(label .. " kühlt ab · " .. string.format("%.0f %%", profile.heat * 100))
+            setStatus(label .. " cooling · " .. string.format("%.0f %%", profile.heat * 100))
             task.wait(0.1)
             profile = getProfile(tree)
             if not profile then return end
@@ -4915,18 +4917,18 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
         position = treePosition(tree)
         if not position or (root.Position - position).Magnitude > range then
-            retryTree(tree, recovery, label .. " · Position außerhalb der Reichweite")
+            retryTree(tree, recovery, label .. " · position out of range")
             return
         end
         local aimAt = hitPosition(tree, position)
         if (aimAt - root.Position).Magnitude < 0.01 then
-            retryTree(tree, recovery, label .. " · kein gültiger Schnittpunkt")
+            retryTree(tree, recovery, label .. " · no valid cut point")
             return
         end
         local aim = CFrame.lookAt(root.Position, aimAt)
         local kind, _, target = native.probe(aim)
         if kind ~= "Tree" or not target or target.Tree ~= tree or not isAreaUnlocked(target.Tree) then
-            retryTree(tree, recovery, label .. " · Stamm verdeckt · anderer Anlaufwinkel")
+            retryTree(tree, recovery, label .. " · trunk blocked · trying another angle")
             return
         end
         local startedAt = os.clock()
@@ -4948,7 +4950,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         if not native.ready(toolName) or native.swing.State ~= "Idle" or native.swing.Side ~= profile.side then return end
         position = treePosition(tree)
         if not position or (root.Position - position).Magnitude > range then
-            retryTree(tree, recovery, label .. " · Schlagposition verlassen")
+            retryTree(tree, recovery, label .. " · moved from hit position")
             return
         end
         aimAt = hitPosition(tree, position)
@@ -4956,7 +4958,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         aim = CFrame.lookAt(root.Position, aimAt)
         kind, _, target = native.probe(aim)
         if kind ~= "Tree" or not target or target.Tree ~= tree or not isAreaUnlocked(target.Tree) then
-            retryTree(tree, recovery, label .. " · Schnittpunkt nicht mehr frei")
+            retryTree(tree, recovery, label .. " · cut point is blocked")
             return
         end
         local hpBefore = treeHP(tree)
@@ -4979,7 +4981,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             if type(hitStop) == "number" then hitStop = hitStop * (profile.hitStopMultiplier or 1) end
         end
         if not connected then
-            if valid() then retryTree(tree, recovery, label .. " · Treffer lokal nicht bereit") end
+            if valid() then retryTree(tree, recovery, label .. " · local hit is not ready") end
             return
         end
         stats.sent = stats.sent + 1
@@ -4988,7 +4990,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             combat.nextStart = math.max(combat.nextStart,
                 startedAt + profile.windup + hitStop + (profile.recover or timing.Recover * timing.ChainAt * profile.scale))
         end
-        setStatus(string.format("%s · %s · %.2f HP · voraussichtlich %d Treffer", label, tree.Name, hpBefore, trace.expectedHits))
+        setStatus(string.format("%s · %s · %.2f HP · Estimated hits: %d", label, tree.Name, hpBefore, trace.expectedHits))
         local deadline = trace.sentAt + HIT_CONFIRM_TIMEOUT
         repeat
             local after = treeHP(tree)
@@ -5024,12 +5026,12 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             trace.stage = "unconfirmed"
             unconfirmedHits = unconfirmedHits + 1
             if unconfirmedHits > maxUnconfirmedRetries then
-                retryTree(tree, recovery, label .. " · Treffer nicht vom Server bestätigt")
+                retryTree(tree, recovery, label .. " · hit not confirmed by server")
                 return
             end
             trace.sameTreeRetries = (trace.sameTreeRetries or 0) + 1
             trace.stage = "resync"
-            setStatus(label .. " · Treffer nicht bestätigt · gleicher Baum, neuer Versuch")
+            setStatus(label .. " · hit not confirmed · retrying this tree")
             -- Die schnelle Bestätigung bleibt 0,13 s; nur nach einem fehlenden
             -- Ack den nativen Takt abwarten, statt den halben Baum zu verlassen.
             task.wait(math.max(HIT_CONFIRM_TIMEOUT, profile.cycle))
@@ -5039,7 +5041,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
             return
         end
     end
-    if valid() then retryTree(tree, recovery, label .. " · Baum benötigt weiteren Anlauf") end
+    if valid() then retryTree(tree, recovery, label .. " · tree needs another attempt") end
 end
 
 -- Die Säge verwendet den nativen sawCut: Schnittfläche, lokale Vorschau und
@@ -5065,7 +5067,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
     if not position then
-        retryTree(tree, recovery, "Kettensäge nicht in Reichweite")
+        retryTree(tree, recovery, "Chainsaw out of range")
         return
     end
     trace.arrivedAt = os.clock()
@@ -5092,7 +5094,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 combat.stopSaw()
                 engageAt = nil
                 if os.clock() >= readyBy then
-                    retryTree(tree, recovery, "Kettensäge wartet auf Werkzeugwechsel / manuellen Angriff")
+                    retryTree(tree, recovery, "Chainsaw waiting for tool switch or manual attack")
                     return
                 end
                 task.wait()
@@ -5110,7 +5112,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 if not profile.locked and profile.heat <= 0.65 then
                     cooling = false
                 else
-                    setStatus(string.format("Kettensäge kühlt ab · %.0f %% Hitze", profile.heat * 100))
+                    setStatus(string.format("Chainsaw cooling · %.0f %% heat", profile.heat * 100))
                     task.wait(0.1)
                     continue
                 end
@@ -5118,7 +5120,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             position = treePosition(tree)
             local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
             if not position or (root.Position - position).Magnitude > range then
-                retryTree(tree, recovery, "Kettensägenposition außerhalb der Reichweite")
+                retryTree(tree, recovery, "Chainsaw position out of range")
                 return
             end
             local data = nativeTreeState(tree)
@@ -5132,7 +5134,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 until not valid() or data and native.visuals.CanChop(data) or os.clock() >= untilReady
                 if not valid() then return end
                 if not data or not native.visuals.CanChop(data) then
-                    retryTree(tree, recovery, "Kettensäge wartet auf lokale Fällvorschau")
+                    retryTree(tree, recovery, "Chainsaw waiting for tree readiness")
                     return
                 end
             end
@@ -5142,7 +5144,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             local kind, hit, target = native.probe(aim)
             if kind ~= "Tree" or not hit or not target or target.Tree ~= tree
                 or not isAreaUnlocked(target.Tree) then
-                retryTree(tree, recovery, "Sägeschnitt verdeckt · anderer Anlaufwinkel")
+                retryTree(tree, recovery, "Cut blocked · trying another angle")
                 return
             end
             startSaw()
@@ -5150,7 +5152,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 trace.stage = "await-throttle"
                 engageAt = engageAt or os.clock()
                 if os.clock() - engageAt > 2.5 then
-                    retryTree(tree, recovery, "Säge vom Server noch nicht bereit")
+                    retryTree(tree, recovery, "Chainsaw is not ready on the server")
                     return
                 end
                 task.wait()
@@ -5185,7 +5187,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             cuts = cuts + 1
             nextCut = trace.sentAt + profile.cycle
             combat.nextStart = nextCut
-            setStatus(string.format("Kettensäge · %s · %.2f HP · %.0f %% Hitze", tree.Name, hpBefore, profile.heat * 100))
+            setStatus(string.format("Chainsaw · %s · %.2f HP · %.0f %% heat", tree.Name, hpBefore, profile.heat * 100))
             local deadline = trace.sentAt + HIT_CONFIRM_TIMEOUT
             repeat
                 local after = treeHP(tree)
@@ -5207,7 +5209,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
             elseif valid() then
                 unconfirmedCuts = unconfirmedCuts + 1
                 if unconfirmedCuts > UNCONFIRMED_HIT_RETRIES then
-                    retryTree(tree, recovery, "Sägeschnitt wiederholt nicht vom Server bestätigt")
+                    retryTree(tree, recovery, "Repeated cuts not confirmed by server")
                     return
                 end
                 trace.sameTreeRetries = (trace.sameTreeRetries or 0) + 1
@@ -5216,11 +5218,11 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 engageAt = nil
                 nextCut = os.clock() + profile.cycle
                 combat.nextStart = nextCut
-                setStatus("Kettensäge · Schnitt nicht bestätigt · gleicher Baum, neuer Versuch")
+                setStatus("Chainsaw · cut not confirmed · retrying this tree")
                 task.wait(math.max(HIT_CONFIRM_TIMEOUT, profile.cycle))
             end
         end
-        if valid() then retryTree(tree, recovery, "Sägebaum benötigt einen weiteren Anlauf") end
+        if valid() then retryTree(tree, recovery, "Chainsaw target needs another attempt") end
     end, function(reason) return debug.traceback(tostring(reason), 2) end)
     combat.stopSaw()
     if not isAvailable(tree) then treeRecovery[tree] = nil end
@@ -5244,7 +5246,7 @@ combat.toolStats[profile.tool] = stats end
     stats.lastAttempt = trace
     local position = approachTree(tree, character, root, humanoid, revision, profile)
     if not valid() then return end
-    if not position then retryTree(tree, recovery, profile.label .. " nicht in Reichweite")
+    if not position then retryTree(tree, recovery, profile.label .. " out of range")
 return end
     trace.arrivedAt = os.clock()
     task.wait(profile.settle)
@@ -5283,13 +5285,13 @@ return end
                 deadline = os.clock() + profile.timeout
             end
             if not isAvailable(tree) or treeCoordinator.isOccupied(tree) then return end
-            if not aimFor() then retryTree(tree, recovery, profile.label .. " hat die Schlagposition verloren")
+            if not aimFor() then retryTree(tree, recovery, profile.label .. " moved from hit position")
 return end
             if os.clock() >= deadline then
-                retryTree(tree, recovery, profile.label .. " wartet auf bestätigten Schaden")
+                retryTree(tree, recovery, profile.label .. " waiting for confirmed damage")
                 return
             end
-            setStatus(profile.label .. " · " .. tree.Name .. " · native Werkzeugsteuerung")
+            setStatus(profile.label .. " · " .. tree.Name .. " · native tool controls")
             task.wait()
         end
     end, function(reason) return debug.traceback(tostring(reason), 2) end)
@@ -5666,7 +5668,7 @@ local function createBossController()
             local left = type(area) == "string" and workspace:GetAttribute("AreaLeft_" .. area)
             if left == 0 and data.settings.Guardians[area] and not workspace:GetAttribute("Calmed_" .. area) then
                 state.bossBusy = true
-                setStatus("Area gerodet · warte auf Guardian …")
+                setStatus("Area cleared · waiting for Guardian…")
                 task.wait(0.1)
                 return true
             end
@@ -5697,7 +5699,7 @@ local function createBossController()
             end
             cancelTween(job)
             releaseHover(job)
-            setStatus("Guardian beendet · warte auf nächste Area …")
+            setStatus("Guardian defeated · waiting for next area…")
             task.wait(0.1)
             return true
         end
@@ -5712,18 +5714,18 @@ local function createBossController()
             or player:GetAttribute("GuardianIntro") == true or player:GetAttribute("InCutscene") == true then
             cancelTween(job)
             releaseHover(job)
-            setStatus("Guardian · warte auf Intro / spielbereiten Charakter …")
+            setStatus("Guardian · waiting for intro or character readiness…")
             task.wait(0.1)
             return true
         end
         if os.clock() - job.detectedAt < (data.settings.Guardian.Emerge or 3) then
-            setStatus("Guardian erscheint …")
+            setStatus("Guardian spawning…")
             task.wait(0.1)
             return true
         end
         if not job.weapon and not configure(job, data) then
             releaseHover(job)
-            setStatus("Guardian · warte auf verfügbare Waffe …")
+            setStatus("Guardian · waiting for a weapon…")
             task.wait(0.1)
             return true
         end
@@ -5757,7 +5759,7 @@ local function createBossController()
         hover(job, root)
         move(job, root, destination, predicted, dodging or not behind, velocity)
         setStatus(string.format("Boss · %s · %.1f HP · %s%s",
-            model:GetAttribute("DisplayName") or active, hp, weapon.name, behind and " · hinter dem Boss" or " · zur Rückseite"))
+            model:GetAttribute("DisplayName") or active, hp, weapon.name, behind and " · behind boss" or " · moving behind boss"))
         local distance = (Vector3.new(root.Position.X, center.Y, root.Position.Z) - center).Magnitude
         if weapon.kind == "gun" then distance = math.max(0, distance - radius) end
         local ready = os.clock() - job.detectedAt >= (data.settings.Guardian.Emerge or 3)
@@ -5837,11 +5839,11 @@ local function createAbilityController()
         if not data or not unlocked(data.api, "Nova") then return nil end
         local now = workspace:GetServerTimeNow()
         if controller.furyActive() then
-            return string.format("Giant's Axe aktiv · %.1f s", player:GetAttribute("FuryUntil") - now)
+            return string.format("Giant's Axe active · %.1f s", player:GetAttribute("FuryUntil") - now)
         end
         local names = unlocked(data.api, "Fury") and "Nova / Giant's Axe" or "Frost Nova"
         local left = math.max(0, (tonumber(player:GetAttribute("FrostReadyAt")) or 0) - now)
-        return names .. (left > 0 and string.format(" · %.1f s gemeinsamer Cooldown", left) or " · Gruppenautomatik bereit")
+        return names .. (left > 0 and string.format(" · %.1f s shared cooldown", left) or " · group targeting ready")
     end
     local function frostTool()
         if ownsFarmTool("Leviathan") then return "Leviathan" end
@@ -5973,7 +5975,7 @@ local function createAbilityController()
         local pending = environment.__ForestControlFrostRequest
         if pending then
             if workspace:GetServerTimeNow() - pending.started < 8 then
-                setStatus("War-God-Fähigkeit · warte auf Serverbestätigung …")
+                setStatus("War-God ability · waiting for confirmation…")
                 task.wait(0.03)
                 return true
             end
@@ -6019,24 +6021,24 @@ local function createAbilityController()
             name = name, cancelled = false, direction = selected.direction }
         frost.request = request
         environment.__ForestControlFrostRequest = request
-        setStatus("War-God · " .. api.Abilities[name].Name .. " · Baumgruppe mit " .. selected.count .. " Zielen")
+        setStatus("War-God · " .. api.Abilities[name].Name .. " · tree group: " .. selected.count .. " targets")
         -- Nicht hart abbrechen: auch nach Ausschalten/Reload muss eine bereits bestätigte Auswahl zurückgestellt werden.
         task.spawn(function()
             local ok, approved, result = pcall(function()
                 if request.original ~= name then
                     local accepted = data.selectAbility:InvokeServer("Ability", 1, name)
-                    if accepted ~= true then return false, "Auswahl abgelehnt" end
+                    if accepted ~= true then return false, "Selection rejected" end
                 end
                 if request.cancelled or not valid() or player:GetAttribute("FrostAbility") ~= name
                     or workspace:GetServerTimeNow() - request.started >= 8
-                    or player:GetAttribute("Tool") ~= tool then return false, "Abgebrochen" end
+                    or player:GetAttribute("Tool") ~= tool then return false, "Cancelled" end
                 local current = frostTrees(root.Position, 32, runestone)
                 local check = name == "Nova"
                     and novaPlan(current, root.Position, request.direction, api.Abilities.Nova, api.Of(player, "Nova"))
                     or name == "Fury" and conePlan(current, root.Position, api.Abilities.Fury)
                 if not check or check.count < 2 or not valid() or request.cancelled
                     or workspace:GetServerTimeNow() < (tonumber(player:GetAttribute("FrostReadyAt")) or 0) then
-                    return false, "Baumgruppe nicht mehr frei / Fähigkeit nicht bereit"
+                    return false, "Tree group unavailable or ability not ready"
                 end
                 root.CFrame = CFrame.lookAt(root.Position, root.Position + check.direction)
                 return data.cast:InvokeServer(name)
@@ -6240,7 +6242,7 @@ local function createAbilityController()
         local data = resolve()
         if not data or not ownsFarmTool("Leviathan") then return false end
         if controller.isFlying() then
-            setStatus("War-God-Wurf · warte auf Rückkehr der Axt …")
+            setStatus("War-God Throw · waiting for axe return…")
             task.wait(0.04)
             return true
         end
@@ -6249,7 +6251,7 @@ local function createAbilityController()
         if player:GetAttribute("Down") or player:GetAttribute("GuardianIntro") or player:GetAttribute("InCutscene")
             or humanoid.Sit or humanoid.Health <= 0 then return false end
         if os.clock() < combat.nextStart then
-            setStatus("War-God-Wurf bereit · vorherigen Schlag abschließen …")
+            setStatus("War-God Throw ready · finishing previous swing…")
             task.wait(0.03)
             return true
         end
@@ -6299,7 +6301,7 @@ local function createAbilityController()
         local request = { started = workspace:GetServerTimeNow(), character = character }
         controller.request = request
         controller.stats.sent = controller.stats.sent + 1
-        setStatus("War-God-Wurf · optimierter Winkel · bis zu " .. selected.count .. " Ziele")
+        setStatus("War-God Throw · optimized angle · up to " .. selected.count .. " targets")
         request.thread = task.spawn(function()
             if not valid() or controller.request ~= request then
                 if controller.request == request then controller.request = nil end
@@ -6333,7 +6335,7 @@ local function farmStep()
     local revision = state.revision
     refreshCombatDisplay()
     if not resolveWorld() then
-        setStatus("Warte auf Map und Chop-Remotes …")
+        setStatus("Waiting for world and chopping controls…")
         task.wait(0.25)
         return
     end
@@ -6341,13 +6343,13 @@ local function farmStep()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not root or not humanoid or humanoid.Health <= 0 then
-        setStatus("Warte auf Charakter …")
+        setStatus("Waiting for character…")
         task.wait(0.1)
         return
     end
     local runestone = state.runController and state.runController.hoardRunestone()
     if runestone and runestone:GetAttribute("Lit") == true then
-        setStatus("Runestone 6 aktiviert · warte auf Säulenrätsel …")
+        setStatus("Runestone 6 active · waiting for pillar puzzle…")
         task.wait(0.1)
         return
     end
@@ -6356,11 +6358,11 @@ local function farmStep()
     if not abilityController.furyActive() and updateSawToolChoice(tree) then return end
     if not tree then
         if nextRetry < math.huge then
-            setStatus("Warte auf nächsten Anlauf · " .. string.format("%.1f", math.max(0, nextRetry - os.clock())) .. " s")
+            setStatus("Next attempt in " .. string.format("%.1f", math.max(0, nextRetry - os.clock())) .. " s")
         elseif runestone then
-            setStatus("Runestone 6 · warte auf freie Ringbäume / Serverbestätigung")
+            setStatus("Runestone 6 · waiting for available ring trees or confirmation")
         else
-            setStatus("Kein freier Baum verfügbar · warte auf Mitspieler / neue Bäume")
+            setStatus("No tree available · waiting for teammates or new trees")
         end
         task.wait(0.1)
         return
@@ -6368,7 +6370,7 @@ local function farmStep()
     if player:GetAttribute("Tool") == "Axe" or player:GetAttribute("Tool") == "Fists" then
         local profile = player:GetAttribute("Tool") == "Fists" and fistsProfile(tree) or axeProfile(tree)
         if not profile then
-            setStatus("Warte auf Werkzeug- und Animationsdaten …")
+            setStatus("Waiting for tool and animation data…")
             task.wait(0.25)
             return
         end
@@ -6378,7 +6380,7 @@ local function farmStep()
     if player:GetAttribute("Tool") == "HellChain" then
         local profile = combatProfile(tree)
         if not profile then
-            setStatus("Warte auf HellChain-Trefferablauf …")
+            setStatus("Waiting for HellChain hit timing…")
             task.wait(0.25)
             return
         end
@@ -6388,7 +6390,7 @@ local function farmStep()
     if player:GetAttribute("Tool") == "Chainsaw" then
         local profile = sawProfile(tree)
         if not profile then
-            setStatus("Warte auf Kettensägen- und Hitzedaten …")
+            setStatus("Waiting for Chainsaw and heat data…")
             task.wait(0.25)
             return
         end
@@ -6397,7 +6399,7 @@ local function farmStep()
     end
     local profile = genericProfile(tree)
     if not profile then
-        setStatus("Kein Baumangriffsprofil für " .. tostring(player:GetAttribute("Tool")))
+        setStatus("No tree attack profile for " .. tostring(player:GetAttribute("Tool")))
         task.wait(0.25)
         return
     end
@@ -6492,10 +6494,10 @@ local function sellThreshold(rules)
     local capacity = rules.math.CarryMax(player)
     if config.AutoDetectBackpackCapacity then
         if capacity == math.huge then
-            return nil, "Auto-Sell · unendlicher Rucksack wird nie voll"
+            return nil, "Auto Sell · infinite backpack never fills"
         end
         if not positive(capacity) or capacity < 1 then
-            return nil, "Auto-Sell wartet auf eine gültige Rucksackkapazität"
+            return nil, "Auto Sell waiting for backpack capacity"
         end
         return math.floor(capacity)
     end
@@ -6556,8 +6558,8 @@ local function finishSale(job, message)
     if isAlive() then
         local controller = state.playerController
         if job.restoreFly and not state.enabled and controller and controller.alive then controller.set("Fly", true) end
-        setSellStatus(message .. (returned and " · zurückgekehrt" or " · Rückkehr bei geändertem Charakter nicht möglich"))
-        setStatus(state.enabled and "Verkauf beendet · suche nächsten Baum …" or "Pausiert · Verkauf beendet")
+        setSellStatus(message .. (returned and " · returned" or " · cannot return after character change"))
+        setStatus(state.enabled and "Sale complete · finding the next tree…" or "Paused · sale complete")
     end
 end
 
@@ -6574,7 +6576,7 @@ function state.cancelSell(reason)
             pcall(task.cancel, thread)
         end
     end
-    finishSale(job, reason or "Verkauf abgebrochen")
+    finishSale(job, reason or "Sale cancelled")
     return true
 end
 
@@ -6584,49 +6586,49 @@ end
 
 local function completeSale(job)
     while state.abilityController and state.abilityController.isFlying() do
-        if not sellJobValid(job) then error("Verkauf unterbrochen") end
-        setSellStatus("Warte auf Rückkehr der geworfenen Axt …")
+        if not sellJobValid(job) then error("Sale interrupted") end
+        setSellStatus("Waiting for thrown axe to return…")
         task.wait(0.04)
     end
     local rules = job.rules
     local station = job.station
-    if not sellJobValid(job) or not stationAllowed(station.spot, rules) then error("Verkaufspunkt nicht mehr freigeschaltet") end
+    if not sellJobValid(job) or not stationAllowed(station.spot, rules) then error("Sell pad is no longer unlocked") end
     local pad = station.pad
     local half = pad.Size / 2
     local frame = pad.CFrame
     local vertical = math.abs(frame.RightVector.Y) * half.X
         + math.abs(frame.UpVector.Y) * half.Y + math.abs(frame.LookVector.Y) * half.Z
     local destination = pad.Position + Vector3.new(0, vertical + job.humanoid.HipHeight + job.root.Size.Y / 2 + 0.5, 0)
-    setSellStatus("Tween zum Verkaufspunkt · " .. tostring(station.label))
-    assert(moveSaleCharacter(job, destination), "Charakter nicht verfügbar")
+    setSellStatus("Traveling to sell pad · " .. tostring(station.label))
+    assert(moveSaleCharacter(job, destination), "Character unavailable")
     local returnAt = os.clock() + 1
     -- Nur kurz für die Positionsreplikation aufs Pad; keine Verkaufsbestätigung abwarten.
     task.wait(0.1)
-    if not sellJobValid(job) then error("Verkauf unterbrochen") end
-    assert(stationAllowed(station.spot, rules) and pad:IsDescendantOf(station.spot), "Verkaufspunkt nicht mehr verfügbar")
+    if not sellJobValid(job) then error("Sale interrupted") end
+    assert(stationAllowed(station.spot, rules) and pad:IsDescendantOf(station.spot), "Sell pad unavailable")
     assert((job.root.Position - pad.Position).Magnitude <= (rules.settings.ServerDepositReach or 24) - 0.5,
-        "Verkaufspunkt nach Tween nicht erreichbar")
+        "Sell pad out of reach after travel")
     rules.deposit:FireServer(false)
     -- Insgesamt mindestens eine Sekunde auf dem Pad bleiben, dann per Tween zurück.
     task.wait(math.max(0, returnAt - os.clock()))
-    if not sellJobValid(job) then error("Verkauf unterbrochen") end
-    return "Holzabgabe ausgelöst"
+    if not sellJobValid(job) then error("Sale interrupted") end
+    return "Logs deposited"
 end
 
 function state.requestSell(mode)
-    if not isAlive() then return false, "Script beendet" end
-    if not isRunTransitionIdle() then return false, "Eine Run-/Event-Interaktion läuft oder der Run ist nicht aktiv" end
-    if state.sellBusy then return false, "Ein Verkauf läuft bereits" end
+    if not isAlive() then return false, "Script stopped" end
+    if not isRunTransitionIdle() then return false, "Run or event interaction in progress, or no active run" end
+    if state.sellBusy then return false, "A sale is already in progress" end
     local count = player:GetAttribute("CarriedLogs")
-    if type(count) ~= "number" or count < 1 then return false, "Kein Holz im Inventar" end
+    if type(count) ~= "number" or count < 1 then return false, "No logs in inventory" end
     local character = player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not root or not humanoid or humanoid.Health <= 0 or humanoid.Sit then return false, "Warte auf einen stehenden, lebenden Charakter" end
+    if not root or not humanoid or humanoid.Health <= 0 or humanoid.Sit then return false, "Waiting for an alive, standing character" end
     local rules = resolveSellRules()
-    if not rules then return false, "Verkaufsregeln noch nicht verfügbar" end
+    if not rules then return false, "Selling data unavailable" end
     local station = nearestSellStation(root.Position, rules)
-    if not station then return false, "Kein freigeschalteter Verkaufspunkt gefunden" end
+    if not station then return false, "No unlocked sell pad found" end
     local controller = state.playerController
     local job = {
         mode = mode == "auto" and "auto" or "manual", character = character,
@@ -6639,17 +6641,17 @@ function state.requestSell(mode)
     state.revision = state.revision + 1
     cancelMovement()
     if controller and controller.enabled.Fly then controller.set("Fly", false) end
-    setStatus("Verkauf läuft · Autofarm pausiert")
+    setStatus("Selling · Auto Farm paused")
     job.thread = task.defer(function()
         local sold, result = xpcall(function() return completeSale(job) end, function(message)
             return debug.traceback(tostring(message), 2)
         end)
         if not sold and not job.cancelled then warn("[ForestControl Sell] " .. tostring(result)) end
         if state.sellJob == job then
-            finishSale(job, sold and result or "Verkauf fehlgeschlagen · Details in der Konsole")
+            finishSale(job, sold and result or "Sale failed · see console")
         end
     end)
-    return true, "Verkauf gestartet"
+    return true, "Sale started"
 end
 
 -- Auto-Collect: Holz mit Grasp sowie eigene Gem-/Shard-Drops.
@@ -6714,7 +6716,7 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
     local logs = workspace:FindFirstChild("Logs")
     local pickup = remotes and remotes:FindFirstChild("PickUpLog")
     if not logs or not pickup or not pickup:IsA("RemoteEvent") then
-        return "Holz: warte auf Logs/PickUpLog"
+        return "Logs: waiting for pickup controls"
     end
 
     local utilities = shared and shared:FindFirstChild("Utilities")
@@ -6744,16 +6746,16 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
     end
     if not collectionAllowed() or player.Character ~= character then return end
     if not carryMath or not logSettings then
-        return "Holz: warte auf Sammelregeln"
+        return "Logs: waiting for pickup data"
     end
 
     local capacity = carryMath.CarryMax(player)
     local carried = player:GetAttribute("CarriedLogs")
     if type(capacity) ~= "number" or type(carried) ~= "number" then
-        return "Holz: warte auf Rucksackdaten"
+        return "Logs: waiting for backpack data"
     end
     if carried >= capacity then
-        return "Holz: Rucksack voll"
+        return "Logs: backpack full"
     end
 
     -- Dieselbe Upgrade-Berechnung wie beim manuellen Einsammeln.
@@ -6779,7 +6781,7 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
     end
     local batch = planLogBatch(candidates, root.Position, firstRange, serverRange, graspRange, limit)
     if #batch == 0 then
-        return "Holz: keines in Reichweite · Grasp " .. grab
+        return "Logs: none in range · Grasp " .. grab
     end
 
     local anchor = batch[1].position
@@ -6810,9 +6812,9 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
         end
     end
     if sent > 0 then
-        return "Holz: " .. sent .. " pro Griff · Grasp " .. grab
+        return "Logs: " .. sent .. " per pickup · Grasp " .. grab
     end
-    return "Holz: warte auf erreichbaren Stamm"
+    return "Logs: waiting for a log in range"
 end
 
 local function currencyKind(drop)
@@ -6843,7 +6845,7 @@ local function collectCurrencyStep(character, root, humanoid, shared, remotes)
     local folder = workspace:FindFirstChild("GemDrops")
     local remote = remotes and remotes:FindFirstChild("CollectGem")
     if not folder or not remote or not remote:IsA("RemoteEvent") then
-        return "Gems/Shards: warte auf GemDrops/CollectGem"
+        return "Gems/Shards: waiting for pickup controls"
     end
     if not gemLogVisuals then
         local scripts = player:FindFirstChild("PlayerScripts")
@@ -6898,7 +6900,7 @@ local function collectCurrencyStep(character, root, humanoid, shared, remotes)
             if kind == "Shards" then shards = shards + 1 else gems = gems + 1 end
         end
     end
-    if gems + shards == 0 then return "Gems/Shards: keine eigenen erreichbaren Drops" end
+    if gems + shards == 0 then return "Gems/Shards: no owned drops in range" end
     return "Gems: " .. gems .. " · Shards: " .. shards
 end
 
@@ -6945,7 +6947,7 @@ state.sellWorker = task.spawn(function()
                 local rules = resolveSellRules()
                 local count = player:GetAttribute("CarriedLogs")
                 if not rules or type(count) ~= "number" then
-                    setSellStatus("Auto-Sell wartet auf Rucksack- und Verkaufsdaten")
+                    setSellStatus("Auto Sell waiting for backpack and selling data")
                     return
                 end
                 local threshold, capacityStatus = sellThreshold(rules)
@@ -6958,7 +6960,7 @@ state.sellWorker = task.spawn(function()
                         setSellStatus(reason)
                     end
                 else
-                    setSellStatus("Auto-Sell bereit · " .. count .. " / " .. threshold .. " Holz")
+                    setSellStatus("Auto Sell ready · " .. count .. " / " .. threshold .. " logs")
                 end
             end, function(reason) return debug.traceback(tostring(reason), 2) end)
             if not checked and isAlive() then
@@ -6987,7 +6989,7 @@ state.bossWorker = task.spawn(function()
                     config.AutoBoss = false
                     if state.controls.AutoBoss then state.controls.AutoBoss:Set(false, true) end
                     bossController.stop()
-                    setStatus("Auto-Bossfight pausiert · Details in der Konsole")
+                    setStatus("Auto Boss Fight paused · see console")
                 end
             else
                 bossController.stop()
@@ -7007,7 +7009,7 @@ state.worker = task.spawn(function()
         if not isRunning() then
             if state.enabled and isGuardianFightActive() and not state.bossBusy
                 and not state.sellBusy and not state.configLoading then
-                setStatus("Bosskampf · Baumfarm pausiert · manuelle Waffenwahl")
+                setStatus("Boss fight · tree farming paused · manual weapon selection")
             end
             if os.clock() >= nextDisplay then
                 nextDisplay = os.clock() + 1
@@ -7025,7 +7027,7 @@ state.worker = task.spawn(function()
             if not ok and isAlive() then
                 warn("[ForestControl] " .. tostring(err))
                 pcall(state.setEnabled, false)
-                pcall(setStatus, "Fehler · Details in der Konsole")
+                pcall(setStatus, "Error · see console")
             end
         end
     end
@@ -7038,4 +7040,4 @@ if state.runController then
     state.runController.start()
 end
 if state.upgradeController then state.upgradeController.start() end
-print("[ForestControl Gen2] Bereit · alte Instanz vollständig beendet · native Configs mit Auto-Load verfügbar.")
+print("[ForestControl Gen2] Ready · previous instance stopped · configs and Auto Load available.")
