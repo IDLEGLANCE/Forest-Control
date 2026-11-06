@@ -4077,8 +4077,13 @@ local function refreshCombatDisplay()
         local ability = state.abilityController
         local left = ability.cooldownLeft()
         text = text .. string.format("\nWar-God-Wurf · %s · letzte Serverziele %d",
-            ability.isFlying() and "Axt unterwegs" or left > 0 and string.format("%.1f s Cooldown", left) or "bereit",
+            ability.frost.request and "Fähigkeitswechsel" or ability.isFlying() and "Axt unterwegs"
+                or left > 0 and string.format("%.1f s Cooldown", left) or "bereit",
             ability.lastFlight and ability.lastFlight.count or 0)
+    end
+    if state.abilityController then
+        local frostStatus = state.abilityController.frostStatus()
+        if frostStatus then text = text .. "\n" .. frostStatus end
     end
     if text ~= combat.lastDisplay then
         handle:Set(text)
@@ -4961,7 +4966,10 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         trace.stage = "await-server"
         -- Derselbe Frost-Cleave-Aufruf wie beim normalen nativen Axt-Einschlag.
         local frost = native.globals and native.globals.FrostCleave
-        if (toolName == "Axe" or profile.axeLike) and type(frost) == "table" and type(frost.Blow) == "function" then frost.Blow(toolName) end
+        if (toolName == "Axe" or profile.axeLike) and type(frost) == "table" and type(frost.Blow) == "function"
+            and (not state.abilityController or state.abilityController.prepareCleave(tree, root)) then
+            frost.Blow(toolName)
+        end
         local hitStop, connected
         if profile.slash then
             connected = profile.slash.controller.Blow(aim, -aim.RightVector * profile.side, profile.side)
@@ -5788,11 +5796,268 @@ local function createAbilityController()
         lastPlan = nil :: { [string]: any }?, lastFlight = nil :: { [string]: any }?,
         flightUntil = 0, lastReturnAt = 0, acceptedAt = 0, nextTryAt = 0,
         stats = { sent = 0, accepted = 0, flights = 0, targets = 0, rejected = 0 },
+        frost = { data = nil, request = nil, nextTryAt = 0, lastCleaveAt = 0,
+            stats = { Nova = 0, Fury = 0, rejected = 0 }, lastCast = nil } :: { [string]: any },
     }
     state.abilityController = controller
 
     local function flat(vector)
         return Vector3.new(vector.X, 0, vector.Z)
+    end
+    local function resolveFrost()
+        if controller.frost.data then return controller.frost.data end
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        local configs = shared and shared:FindFirstChild("Configs")
+        local module = configs and configs:FindFirstChild("FrostSaga")
+        local cast = ReplicatedStorage:FindFirstChild("FrostCast")
+        local selectAbility = ReplicatedStorage:FindFirstChild("FrostSaga")
+        if not module or not cast or not cast:IsA("RemoteFunction")
+            or not selectAbility or not selectAbility:IsA("RemoteFunction") then return nil end
+        local ok, api = pcall(require, module)
+        if not ok or type(api) ~= "table" or type(api.Of) ~= "function" then return nil end
+        controller.frost.data = { api = api, cast = cast, selectAbility = selectAbility }
+        return controller.frost.data
+    end
+    local function unlocked(api, name)
+        local tier = tonumber(player:GetAttribute("FrostTier")) or 0
+        for index, entry in ipairs(api.Tiers or {}) do
+            if entry.Ability == name then return tier >= index end
+        end
+        return false
+    end
+    controller.frostUnlocked = function(name)
+        local data = resolveFrost()
+        return data ~= nil and unlocked(data.api, name)
+    end
+    function controller.furyActive()
+        return (tonumber(player:GetAttribute("FuryUntil")) or 0) > workspace:GetServerTimeNow()
+    end
+    function controller.frostStatus()
+        local data = resolveFrost()
+        if not data or not unlocked(data.api, "Nova") then return nil end
+        local now = workspace:GetServerTimeNow()
+        if controller.furyActive() then
+            return string.format("Giant's Axe aktiv · %.1f s", player:GetAttribute("FuryUntil") - now)
+        end
+        local names = unlocked(data.api, "Fury") and "Nova / Giant's Axe" or "Frost Nova"
+        local left = math.max(0, (tonumber(player:GetAttribute("FrostReadyAt")) or 0) - now)
+        return names .. (left > 0 and string.format(" · %.1f s gemeinsamer Cooldown", left) or " · Gruppenautomatik bereit")
+    end
+    local function frostTool()
+        if ownsFarmTool("Leviathan") then return "Leviathan" end
+        if ownsFarmTool("Axe") then return "Axe" end
+        return nil
+    end
+    local function frostTrees(origin, range, runestone)
+        local nodes = {}
+        for _, tree in ipairs(trees:GetChildren()) do
+            -- Gesperrte und beanspruchte Bäume bleiben für die Flächensicherheitsprüfung sichtbar.
+            if not tree:GetAttribute("Felled") and not tree:GetAttribute("Doomed")
+                and treeHP(tree) ~= 0 and tree:FindFirstChild("Top", true) then
+                local position = treePosition(tree)
+                if position and flat(position - origin).Magnitude <= range then
+                    table.insert(nodes, { tree = tree, position = position, hp = treeHP(tree),
+                        allowed = isAvailable(tree) and not treeCoordinator.isOccupied(tree)
+                            and (not runestone or tree:GetAttribute("RuneRing") == runestone.Name),
+                        ready = (skippedUntil[tree] or 0) <= os.clock() })
+                end
+            end
+        end
+        return nodes
+    end
+    -- Prüft Zielwinkel und die Grenzen aller Winkelintervalle, nicht nur die nächste Baumrichtung.
+    local function conePlan(nodes, origin, spec, required)
+        local halfArc = math.rad(tonumber(spec.Arc) or 120) / 2
+        local reach = tonumber(spec.Reach) or 15
+        local limit = math.max(1, math.floor(tonumber(spec.MaxPerSwing) or 4))
+        local angles = {}
+        for _, node in ipairs(nodes) do
+            local offset = flat(node.position - origin)
+            if offset.Magnitude > 0.01 and offset.Magnitude <= reach then
+                local angle = math.atan2(offset.Z, offset.X)
+                for _, delta in ipairs({ 0, halfArc - 0.02, -halfArc + 0.02 }) do
+                    table.insert(angles, angle + delta)
+                end
+            end
+        end
+        local best
+        for _, angle in ipairs(angles) do
+            local direction = Vector3.new(math.cos(angle), 0, math.sin(angle))
+            local count, hp, safe, includes = 0, 0, true, required == nil
+            for _, node in ipairs(nodes) do
+                local offset = flat(node.position - origin)
+                if offset.Magnitude <= reach + 0.25 and (offset.Magnitude <= 0.01
+                    or direction:Dot(offset.Unit) >= math.cos(halfArc + 0.01)) then
+                    if not node.allowed then safe = false; break end
+                    if node.ready and offset.Magnitude <= reach - 0.25
+                        and (offset.Magnitude <= 0.01 or direction:Dot(offset.Unit) >= math.cos(halfArc - 0.01)) then
+                        count = count + 1
+                        hp = hp + (node.hp or 0)
+                        if node.tree == required then includes = true end
+                    end
+                end
+            end
+            count = math.min(count, limit)
+            if safe and includes and count > 0 and (not best or count > best.count or count == best.count and hp > best.hp) then
+                best = { direction = direction, count = count, hp = hp }
+            end
+        end
+        return best
+    end
+    controller.conePlan = conePlan
+    local function novaPlan(nodes, origin, forward, spec, scaled)
+        local radius = tonumber(scaled.Radius) or tonumber(spec.Radius) or 20
+        local damage = tonumber(spec.Damage) or 6
+        local limit = math.max(1, math.floor(tonumber(spec.MaxTrees) or 12))
+        local directions = { flat(forward) }
+        for _, node in ipairs(nodes) do
+            local offset = flat(node.position - origin)
+            if node.allowed and offset.Magnitude > 0.01 then table.insert(directions, offset.Unit) end
+        end
+        local best
+        for _, vector in ipairs(directions) do
+            if vector.Magnitude < 0.01 then continue end
+            local direction = vector.Unit
+            local center = origin + direction * 3.5
+            local count, safe = 0, true
+            for _, node in ipairs(nodes) do
+                local fromRoot = flat(node.position - origin).Magnitude
+                local fromCenter = flat(node.position - center).Magnitude
+                if math.min(fromRoot, fromCenter) <= radius + 0.25 then
+                    if not node.allowed then safe = false; break end
+                    if node.ready and node.hp and node.hp <= damage and math.max(fromRoot, fromCenter) <= radius - 0.5 then
+                        count = count + 1
+                    end
+                end
+            end
+            count = math.min(count, limit)
+            if safe and count > 0 and (not best or count > best.count) then
+                best = { direction = direction, count = count }
+            end
+        end
+        return best
+    end
+    controller.novaPlan = novaPlan
+    local function frostChoice(nova, fury, pool, cycle, api, scaledNova, scaledFury)
+        local novaGain = nova and nova.count >= 2 and nova.count / math.max(0.1, scaledNova.Cooldown) or 0
+        local furyGain = 0
+        if fury and fury.count >= 2 then
+            local swings = math.floor(scaledFury.Duration / math.max(cycle, api.Abilities.Fury.MinGap))
+            local targets = math.min(pool, swings * fury.count)
+            -- Zusatznutzen gegenüber einzelnen normalen Schlägen während desselben Zeitfensters.
+            furyGain = targets * (1 - 1 / fury.count) / math.max(0.1, scaledFury.Cooldown)
+        end
+        if furyGain > novaGain then return "Fury", fury end
+        if novaGain > 0 then return "Nova", nova end
+        return nil
+    end
+    controller.frostChoice = frostChoice
+    function controller.prepareCleave(tree, root)
+        if not controller.furyActive() then return true end
+        local data = resolveFrost()
+        if not data or not isRunning() then return false end
+        local spec = data.api.Abilities.Fury
+        local now = workspace:GetServerTimeNow()
+        if now - controller.frost.lastCleaveAt < (tonumber(spec.MinGap) or 0.3) then return false end
+        local rune = state.runController and state.runController.hoardRunestone()
+        local nodes = frostTrees(root.Position, (tonumber(spec.Reach) or 15) + 0.5, rune)
+        local selected = conePlan(nodes, root.Position, spec, tree)
+        if not selected then return false end
+        root.CFrame = CFrame.lookAt(root.Position, root.Position + selected.direction)
+        controller.frost.lastCleaveAt = now
+        controller.frost.lastCleave = selected
+        return true
+    end
+    local function frostStep(character, root, humanoid, runestone)
+        local frost = controller.frost
+        local pending = environment.__ForestControlFrostRequest
+        if pending then
+            if workspace:GetServerTimeNow() - pending.started < 8 then
+                setStatus("War-God-Fähigkeit · warte auf Serverbestätigung …")
+                task.wait(0.03)
+                return true
+            end
+            return false
+        end
+        local data = resolveFrost()
+        local tool = data and frostTool()
+        if not tool then return false end
+        if controller.furyActive() then
+            if player:GetAttribute("Tool") ~= tool then requestFarmTool(tool) end
+            return false
+        end
+        local now = workspace:GetServerTimeNow()
+        if now < frost.nextTryAt or now < (tonumber(player:GetAttribute("FrostReadyAt")) or 0)
+            or controller.isFlying() or os.clock() < combat.nextStart then return false end
+        local api = data.api
+        local hasNova, hasFury = unlocked(api, "Nova"), unlocked(api, "Fury")
+        if not hasNova and not hasFury then return false end
+        local nodes = frostTrees(root.Position, 32, runestone)
+        local nova = hasNova and novaPlan(nodes, root.Position, root.CFrame.LookVector, api.Abilities.Nova, api.Of(player, "Nova"))
+        local fury = hasFury and conePlan(nodes, root.Position, api.Abilities.Fury)
+        local pool = 0
+        for _, node in ipairs(nodes) do if node.allowed and node.ready then pool = pool + 1 end end
+        local profile = tool == "Axe" and axeProfile(nil, true) or genericProfile(nil, tool)
+        local name, selected = frostChoice(nova, fury, pool, profile and profile.cycle or 1, api,
+            api.Of(player, "Nova"), api.Of(player, "Fury"))
+        if not name then return false end
+        local revision = state.revision
+        local function valid()
+            return controller.alive and isRunning() and state.revision == revision and player.Character == character
+                and root:IsDescendantOf(character) and humanoid.Health > 0 and not humanoid.Sit
+                and not player:GetAttribute("Down") and not player:GetAttribute("GuardianIntro")
+                and not player:GetAttribute("InCutscene")
+        end
+        if not valid() then return false end
+        if player:GetAttribute("Tool") ~= tool and not requestFarmTool(tool) then return true end
+        if not valid() or controller.isFlying() then return false end
+        cancelMovement()
+        combat.stopSaw()
+        combat.stopNative()
+        root.CFrame = CFrame.lookAt(root.Position, root.Position + selected.direction)
+        local request = { started = workspace:GetServerTimeNow(), original = player:GetAttribute("FrostAbility"),
+            name = name, cancelled = false, direction = selected.direction }
+        frost.request = request
+        environment.__ForestControlFrostRequest = request
+        setStatus("War-God · " .. api.Abilities[name].Name .. " · Baumgruppe mit " .. selected.count .. " Zielen")
+        -- Nicht hart abbrechen: auch nach Ausschalten/Reload muss eine bereits bestätigte Auswahl zurückgestellt werden.
+        task.spawn(function()
+            local ok, approved, result = pcall(function()
+                if request.original ~= name then
+                    local accepted = data.selectAbility:InvokeServer("Ability", 1, name)
+                    if accepted ~= true then return false, "Auswahl abgelehnt" end
+                end
+                if request.cancelled or not valid() or player:GetAttribute("FrostAbility") ~= name
+                    or workspace:GetServerTimeNow() - request.started >= 8
+                    or player:GetAttribute("Tool") ~= tool then return false, "Abgebrochen" end
+                local current = frostTrees(root.Position, 32, runestone)
+                local check = name == "Nova"
+                    and novaPlan(current, root.Position, request.direction, api.Abilities.Nova, api.Of(player, "Nova"))
+                    or name == "Fury" and conePlan(current, root.Position, api.Abilities.Fury)
+                if not check or check.count < 2 or not valid() or request.cancelled
+                    or workspace:GetServerTimeNow() < (tonumber(player:GetAttribute("FrostReadyAt")) or 0) then
+                    return false, "Baumgruppe nicht mehr frei / Fähigkeit nicht bereit"
+                end
+                root.CFrame = CFrame.lookAt(root.Position, root.Position + check.direction)
+                return data.cast:InvokeServer(name)
+            end)
+            if ok and approved == true then
+                frost.stats[name] = frost.stats[name] + 1
+                frost.lastCast = { name = name, count = result, at = request.started }
+                frost.nextTryAt = workspace:GetServerTimeNow() + 0.5
+            else
+                frost.stats.rejected = frost.stats.rejected + 1
+                frost.nextTryAt = workspace:GetServerTimeNow() + 2
+            end
+            if request.original ~= name and (request.original == "Throw" or request.original == "Nova" or request.original == "Fury")
+                and player.Parent and player:GetAttribute("FrostAbility") == name then
+                pcall(data.selectAbility.InvokeServer, data.selectAbility, "Ability", 1, request.original)
+            end
+            if frost.request == request then frost.request = nil end
+            if environment.__ForestControlFrostRequest == request then environment.__ForestControlFrostRequest = nil end
+        end)
+        task.wait(0.02)
+        return true
     end
     local function better(a, b)
         if not b then return true end
@@ -5883,10 +6148,12 @@ local function createAbilityController()
     end
     function controller.cancel()
         cancelRequest()
+        if controller.frost.request then controller.frost.request.cancelled = true end
     end
     function controller.destroy()
         controller.alive = false
         cancelRequest()
+        if controller.frost.request then controller.frost.request.cancelled = true end
         if controller.connection then controller.connection:Disconnect(); controller.connection = nil end
     end
     local function resolve()
@@ -5938,6 +6205,8 @@ local function createAbilityController()
     end
     function controller.isFlying()
         local now = workspace:GetServerTimeNow()
+        local frostRequest = environment.__ForestControlFrostRequest
+        if frostRequest and now - frostRequest.started < 8 then return true end
         local request = controller.request
         if request and now - request.started >= 8 then
             cancelRequest()
@@ -5966,6 +6235,8 @@ local function createAbilityController()
     end
     function controller.step(character, root, humanoid, runestone)
         if not controller.alive or not isRunning() then return false end
+        if frostStep(character, root, humanoid, runestone) then return true end
+        if controller.furyActive() then return false end
         local data = resolve()
         if not data or not ownsFarmTool("Leviathan") then return false end
         if controller.isFlying() then
@@ -6082,7 +6353,7 @@ local function farmStep()
     end
     if abilityController.step(character, root, humanoid, runestone) then return end
     local tree, nextRetry = nearestTree(root, runestone)
-    if updateSawToolChoice(tree) then return end
+    if not abilityController.furyActive() and updateSawToolChoice(tree) then return end
     if not tree then
         if nextRetry < math.huge then
             setStatus("Warte auf nächsten Anlauf · " .. string.format("%.1f", math.max(0, nextRetry - os.clock())) .. " s")
