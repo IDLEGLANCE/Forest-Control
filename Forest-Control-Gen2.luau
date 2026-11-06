@@ -119,6 +119,7 @@ local config = {
     AutoUpgrade = false,
     AutoBuyFarmTools = true,
     AutoRavens = false,
+    AutoRavenRejoin = false,
     AutoHoard = false,
     AutoFinishRun = false,
     AutoRepeatRun = false,
@@ -155,7 +156,8 @@ end
 
 local function isRunTransitionIdle()
     local controller = state.runController
-    return not state.runBusy and not state.upgradeBusy and not (controller and (controller.inLobby or controller.ended or controller.departing))
+    return not config.AutoRavenRejoin and not state.runBusy and not state.upgradeBusy
+        and not (controller and (controller.inLobby or controller.ended or controller.departing))
 end
 
 local function isRunning()
@@ -1657,7 +1659,7 @@ local function createUpgradeAutomation()
         return actions, policy .. "\n" .. table.concat(lines, "\n"), levels, maximum
     end
     local function ready(data)
-        if not running() or not config.AutoUpgrade or state.configLoading or state.sellBusy or state.runBusy
+        if not running() or not config.AutoUpgrade or config.AutoRavenRejoin or state.configLoading or state.sellBusy or state.runBusy
             or state.bossBusy or isGuardianFightActive() or data.place.IsLobby()
             or player:GetAttribute("Loaded") ~= true or player:GetAttribute("InCutscene") == true
             or player:GetAttribute("Down") == true then return false end
@@ -1887,12 +1889,14 @@ local function createRunAutomation()
         teleportToken = HttpService:GenerateGUID(false),
         inLobby = false, ended = false, departing = false, returning = false, returnAt = 0, returnAttempts = 0,
         openPad = nil :: string?, launchingUntil = 0, nextLaunch = 0, catalog = nil :: any,
+        ravenCycle = nil :: { [string]: any }?, nextRejoin = 0,
     }
     state.runController = controller
     local function running() return controller.alive and isAlive() end
     local function report(message)
         if controller.status == message then return end
         controller.status = message
+        if config.AutoRavenRejoin then setStatus(message) end
     end
     local function moduleAt(parent, name)
         local object = parent and parent:FindFirstChild(name)
@@ -1966,6 +1970,23 @@ local function createRunAutomation()
     end
     function controller.changed(key)
         if controller.job == key and config[key] ~= true then controller.cancel() end
+        if key == "AutoRavenRejoin" then
+            controller.cancel()
+            controller.ravenCycle = nil
+            controller.nextRejoin, controller.launchingUntil = 0, 0
+            controller.returning, controller.departing, controller.returnAttempts = false, false, 0
+            state.revision = state.revision + 1
+            cancelMovement()
+            if state.treeCoordinator then state.treeCoordinator.clear() end
+            if state.combat then state.combat.stopSaw(); state.combat.stopNative() end
+            if config.AutoRavenRejoin then
+                state.cancelSell("Raben-Rejoin · Verkauf pausiert")
+                if state.upgradeController then state.upgradeController.cancel() end
+                report("Raben-Rejoin · übrige Automatik pausiert")
+            else
+                setStatus(state.enabled and "Autofarm wieder freigegeben" or "Raben-Rejoin ausgeschaltet")
+            end
+        end
         if key == "AutoRepeatRun" and config.AutoRepeatRun ~= true then
             controller.departing, controller.returning = false, false
             controller.returnAttempts = 0
@@ -1983,6 +2004,23 @@ local function createRunAutomation()
         if controller.worker and controller.worker ~= coroutine.running() then pcall(task.cancel, controller.worker) end
         controller.worker = nil
     end
+    local function validateRavenCycle(raw)
+        if type(raw) ~= "table" or (raw.phase ~= "collect" and raw.phase ~= "lobby" and raw.phase ~= "rejoining")
+            or type(raw.peers) ~= "table" or #raw.peers > 16 then return nil end
+        if raw.runKey ~= nil and (type(raw.runKey) ~= "string" or #raw.runKey > 128) then return nil end
+        local peers = {}
+        for _, id in ipairs(raw.peers) do
+            if type(id) ~= "number" or id <= 0 or id >= 2 ^ 53 or id % 1 ~= 0 then return nil end
+            table.insert(peers, id)
+        end
+        local joinUntil = raw.joinUntil
+        if joinUntil ~= nil and (type(joinUntil) ~= "number" or joinUntil ~= joinUntil
+            or joinUntil < 0 or joinUntil > os.time() + 60) then return nil end
+        return { phase = raw.phase, runKey = raw.runKey, peers = peers, joinUntil = joinUntil }
+    end
+    if config.AutoRavenRejoin and type(previous) == "table" and type(previous.runController) == "table" then
+        controller.ravenCycle = validateRavenCycle(previous.runController.ravenCycle)
+    end
     local function capture()
         local modes = { farm = state.enabled, collect = state.collectEnabled, sell = state.sellEnabled,
             player = state.playerController and table.clone(state.playerController.enabled) or {} }
@@ -1993,7 +2031,8 @@ local function createRunAutomation()
         end
         return { version = 1, gameId = game.GameId, expires = os.time() + 900, token = controller.teleportToken,
             settings = table.clone(config), modes = modes, binds = binds,
-            theme = state.themeStudio and state.themeStudio.exportJSON() or nil }
+            theme = state.themeStudio and state.themeStudio.exportJSON() or nil,
+            ravenCycle = config.AutoRavenRejoin and validateRavenCycle(controller.ravenCycle) or nil }
     end
     function controller.prepareTeleport()
         if not running() then return false end
@@ -2047,6 +2086,11 @@ end
             controller.queued = false
             controller.launchingUntil, controller.returning = 0, false
             controller.nextLaunch = os.clock() + 8
+            if config.AutoRavenRejoin then
+                controller.departing = false
+                controller.nextRejoin = os.clock() + 8
+                if controller.ravenCycle then controller.ravenCycle.joinUntil = nil end
+            end
             report("Teleport fehlgeschlagen · erneuter Versuch folgt")
         end
     end)
@@ -2181,7 +2225,7 @@ end
         for index, entry in ipairs(current.Areas) do if entry.Key == area then return index <= unlocked end end
         return false
     end
-    local function collectRaven(wild, current)
+    local function collectRaven(wild, current, modeKey)
         local ravens = wild:FindFirstChild("Ravens")
         local _, root = aliveCharacter()
         if not ravens or not root then return false end
@@ -2201,7 +2245,7 @@ end
             if count >= (tonumber(ravens:GetAttribute("Total")) or 12) then report("Raben · alle " .. count .. " vom Server bestätigt") end
             return false
         end
-        local job = beginJob("AutoRavens")
+        local job = beginJob(modeKey or "AutoRavens")
         if not job then return false end
         local raven = nearest
         report("Raben · " .. count .. "/" .. tostring(ravens:GetAttribute("Total") or 12) .. " · " .. raven.Name)
@@ -2299,30 +2343,39 @@ end
         finishJob(job)
         return true
     end
-    local function returnToLobby(chop, places, eventComplete)
+    local function returnToLobby(chop, places, eventComplete, ravensOnly)
         if not controller.queueAvailable then
             report("Auto-Run benötigt Executor-Unterstützung für Teleport-Neustarts"); return
         end
-        if controller.returning then report("Run beendet · Rückkehr zur Lobby läuft"); return end
-        if controller.returnAttempts >= 3 then report("Lobby-Teleport nicht bestätigt · Wiederholung aus- und einschalten für neuen Versuch"); return end
+        if controller.returning then report("Rückkehr zur Lobby läuft"); return end
+        if controller.returnAttempts >= 3 then report("Lobby-Teleport nicht bestätigt · Automatik aus- und einschalten für neuen Versuch"); return end
         if os.clock() < controller.returnAt then return end
         local remote = chop and chop:FindFirstChild("ReturnToLobby")
         if not eventComplete and (not remote or not remote:IsA("RemoteEvent")) then return end
         if eventComplete and (not places or type(places.Lobby) ~= "number") then return end
         if eventComplete and not controller.departing then
-            local job = beginJob("AutoRepeatRun")
+            local job = beginJob(ravensOnly and "AutoRavenRejoin" or "AutoRepeatRun")
             if job then finishJob(job) end
             state.revision = state.revision + 1
             cancelMovement()
         end
         controller.cancel()
         controller.departing = eventComplete == true
-        report(eventComplete and "12 Raben und Kiste bestätigt · zurück zur Lobby für nächsten Run" or "Run beendet · zurück zur Lobby und neuen Run starten")
+        if ravensOnly and not controller.prepareTeleport() then
+            controller.departing = false
+            return
+        end
+        report(ravensOnly and "12 Raben bestätigt · zur Lobby und denselben Run rejoinen"
+            or eventComplete and "12 Raben und Kiste bestätigt · zurück zur Lobby für nächsten Run"
+            or "Run beendet · zurück zur Lobby und neuen Run starten")
         controller.returnAt, controller.returnAttempts = os.clock() + 5, controller.returnAttempts + 1
         if eventComplete then
             -- Normale Client-Teleport-API: Event-Rewards sind bereits bestätigt; kein vorgetäuschter Run-Abschluss.
             local accepted, reason = pcall(function() game:GetService("TeleportService"):Teleport(places.Lobby, player) end)
-            if not accepted then report("Lobby-Teleport fehlgeschlagen: " .. tostring(reason)) end
+            if not accepted then
+                if ravensOnly then controller.departing, controller.returning = false, false end
+                report("Lobby-Teleport fehlgeschlagen: " .. tostring(reason))
+            end
         else
             remote:FireServer()
         end
@@ -2338,6 +2391,134 @@ end
             end
         end
         return count >= (tonumber(ravens:GetAttribute("Total")) or 12)
+    end
+    local function ravensComplete(wild)
+        local ravens = wild and wild:FindFirstChild("Ravens")
+        if not ravens then return false end
+        local found, count = foundRavens(), 0
+        for _, raven in ipairs(ravens:GetChildren()) do
+            if raven:IsA("Model") then
+                if not found[raven:GetAttribute("RavenId") or raven.Name] then return false end
+                count = count + 1
+            end
+        end
+        return count >= math.max(12, tonumber(ravens:GetAttribute("Total")) or 12)
+    end
+    local function ravenRejoinPeers(info, catalog, cycle)
+        if type(info) ~= "table" or type(info.Members) ~= "table" then return nil, "Kein laufender Rejoin-Run verfügbar" end
+        local eventWorld
+        for _, entry in ipairs(catalog and catalog.Maps or {}) do
+            if entry.Key == "WarGod" and entry.Hidden ~= true and (not entry.Ends or entry.Ends > os.time()) then
+                eventWorld = entry
+                break
+            end
+        end
+        if not eventWorld or (info.Map ~= eventWorld.Name and info.Map ~= eventWorld.Key) then
+            return nil, "Rejoin-Eintrag gehört nicht zur Frozen-Wilds-Eventwelt"
+        end
+        local peers, matching = {}, not cycle or #cycle.peers == 0
+        for _, member in ipairs(info.Members) do
+            if type(member) == "table" then
+                local id = tonumber(member.Id)
+                if id and id ~= player.UserId and id > 0 and id < 2 ^ 53 and id % 1 == 0 then
+                    if cycle and table.find(cycle.peers, id) then matching = true end
+                    if member.Online == true then table.insert(peers, id) end
+                end
+            end
+        end
+        if not matching then return nil, "Warte auf den Rejoin-Eintrag des bisherigen Gruppen-Runs" end
+        if #peers == 0 then return nil, "Warte auf einen Mitspieler, der im Run bleibt" end
+        return peers
+    end
+    local function ravenRejoinCall(remote, action)
+        local job = beginJob("AutoRavenRejoin")
+        if not job then return false, nil end
+        local result = { done = false, ok = false, response = nil :: any }
+        local rpc = task.spawn(function()
+            local success, response = pcall(remote.InvokeServer, remote, action)
+            result.ok, result.response, result.done = success, response, true
+        end)
+        controller.rpc = rpc
+        local deadline = os.clock() + 8
+        repeat task.wait(0.05) until result.done or not jobValid(job) or os.clock() >= deadline
+        if not result.done then pcall(task.cancel, rpc) end
+        if controller.rpc == rpc then controller.rpc = nil end
+        local valid = jobValid(job)
+        finishJob(job)
+        return valid and result.done and result.ok, result.response
+    end
+    local function rejoinRavenRun(data, remotes)
+        if os.clock() < controller.nextRejoin or os.clock() < controller.launchingUntil then return end
+        local pending = controller.ravenCycle
+        if pending and pending.phase == "rejoining" and (pending.joinUntil or 0) > os.time() then
+            report("Raben-Rejoin · Beitritt läuft")
+            return
+        end
+        if not controller.queueAvailable then report("Raben-Rejoin benötigt Teleport-Neustarts des Executors"); return end
+        if player:GetAttribute("Loaded") ~= true or not canAct() then return end
+        local remote = remotes and remotes:FindFirstChild("Rejoin")
+        if not remote or not remote:IsA("RemoteFunction") then report("Warte auf den nativen Rejoin-Button"); return end
+        controller.nextRejoin = os.clock() + 5
+        local ok, info = ravenRejoinCall(remote, "Get")
+        if not running() or not config.AutoRavenRejoin then return end
+        if not ok then report("Rejoin-Prüfung noch nicht bestätigt · warte"); return end
+        local peers, reason = ravenRejoinPeers(info, data.catalog, controller.ravenCycle)
+        if not peers then report(reason); return end
+        local cycle = controller.ravenCycle or { peers = peers }
+        cycle.peers, cycle.phase, cycle.joinUntil = peers, "rejoining", os.time() + 20
+        controller.ravenCycle = cycle
+        if not controller.prepareTeleport() then
+            cycle.phase, cycle.joinUntil = "lobby", nil
+            return
+        end
+        controller.launchingUntil = os.clock() + 20
+        report("Raben-Rejoin · denselben Gruppen-Run über Rejoin betreten")
+        local joined, response = ravenRejoinCall(remote, "Go")
+        if not running() or not config.AutoRavenRejoin then return end
+        if joined and type(response) == "table" and response.Ok then return end
+        if joined and type(response) == "table" then cycle.phase, cycle.joinUntil = "lobby", nil end
+        controller.launchingUntil = 0
+        controller.nextRejoin = os.clock() + 10
+        report("Rejoin noch nicht bestätigt · " .. tostring(type(response) == "table" and response.Why or "neuer Versuch folgt"))
+    end
+    local function ravenRejoinStep(data, chop, lobbyRemotes)
+        if data.lobby then
+            controller.ended = false
+            rejoinRavenRun(data, lobbyRemotes)
+            return
+        end
+        if not data.chapter or data.chapter.Key ~= "WarGod" then report("Raben-Rejoin wartet auf einen Frozen-Wilds-Gruppen-Run"); return end
+        if controller.ended or playerGui:FindFirstChild("RunEnd") then report("Run beendet · warte auf einen verfügbaren Rejoin-Run"); return end
+        if player:GetAttribute("Loaded") ~= true then report("Raben-Rejoin · warte auf Spielerdaten"); return end
+        local wild = workspace:FindFirstChild("FrostWilds")
+        if not wild or not wild:FindFirstChild("Ravens") then report("Raben-Rejoin · warte auf Raben"); return end
+        local runKey = workspace:GetAttribute("__RunKey")
+        if type(runKey) ~= "string" or runKey == "" then report("Raben-Rejoin · warte auf Run-Kennung"); return end
+        local cycle = controller.ravenCycle
+        if cycle and cycle.runKey and cycle.runKey ~= runKey then report("Raben-Rejoin pausiert · anderer Run erkannt"); return end
+        local peers = {}
+        for _, peer in ipairs(Players:GetPlayers()) do if peer ~= player then table.insert(peers, peer.UserId) end end
+        if #peers == 0 then report("Raben-Rejoin · ein Mitspieler muss im Run bleiben"); return end
+        if not cycle then cycle = { phase = "collect", runKey = runKey, peers = peers }; controller.ravenCycle = cycle end
+        cycle.runKey, cycle.peers = runKey, peers
+        if cycle.phase == "rejoining" then
+            local encoded = player:GetAttribute("RavensFound")
+            local ready, values = pcall(function() return type(encoded) == "string" and HttpService:JSONDecode(encoded) end)
+            if not ready or type(values) ~= "table" or ravensComplete(wild) then
+                report("Raben-Rejoin · warte auf neuen bestätigten Raben-Sammelstand")
+                return
+            end
+            cycle.phase, cycle.joinUntil = "collect", nil
+        end
+        if ravensComplete(wild) then
+            if not canAct() then return end
+            cycle.phase = "lobby"
+            returnToLobby(chop, data.chopping.Places, true, true)
+            return
+        end
+        if not canAct() then return end
+        if collectRaven(wild, data.chapter, "AutoRavenRejoin") then return end
+        report("Raben-Rejoin · warte auf fehlende Raben in freigeschalteten Areas")
     end
     local function freePad(pad)
         if not pad:IsA("Model") then return false end
@@ -2432,6 +2613,10 @@ end
         local data = rules()
         if not data then report("Warte auf Welt- und Run-Daten"); return end
         controller.inLobby = data.lobby
+        if config.AutoRavenRejoin then
+            ravenRejoinStep(data, chop, lobbyRemotes)
+            return
+        end
         if data.lobby then
             controller.ended = false
             if config.AutoRepeatRun then launchRun(data, lobbyRemotes) else report("Lobby · automatischer Run-Start ausgeschaltet") end
@@ -2467,6 +2652,11 @@ end
         end
         config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
         config.CollectRadius = clampLogCollectRadius(config.CollectRadius)
+        if config.AutoRavenRejoin then
+            controller.ravenCycle = validateRavenCycle(payload.ravenCycle) or controller.ravenCycle
+        else
+            controller.ravenCycle = nil
+        end
         for key, value in pairs(config) do
             local control = state.controls[key]
             if control then
@@ -2506,6 +2696,12 @@ end
                 value = config[key], flag = "Setting_" .. key,
                 callback = function(value) commitBoolean(key, value) end })
         end
+        event:CreateSection({ name = "Raben-Rejoin · Gruppen-Run" })
+        state.controls.AutoRavenRejoin = event:CreateToggle({
+            name = "Raben per Rejoin wiederholen", value = config.AutoRavenRejoin, flag = "Setting_AutoRavenRejoin",
+            description = "Nur Raben: nach 12 bestätigten Funden zur Lobby und über Rejoin in denselben Gruppen-Run. Ein Mitspieler muss im Run bleiben. Farm, Bosskampf, Sammeln, Verkauf und Upgrades pausieren; es wird kein neuer Run erstellt.",
+            callback = function(value) commitBoolean("AutoRavenRejoin", value) end,
+        })
         tab:CreateSection({ name = "Run-Abschluss & Wiederholung" })
         state.controls.AutoFinishRun = tab:CreateToggle({
             name = "Run automatisch abschließen", value = config.AutoFinishRun, flag = "Setting_AutoFinishRun",
