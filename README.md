@@ -1,6 +1,6 @@
 # Forest Control
 
-Forest Control mit Sirius Rayfield Gen2: Autofarm, Werkzeugautomatik, War-God-Würfe, Auto-Collect, Auto-Sell und Auto-Bossfight.
+Forest Control mit Sirius Rayfield Gen2: Autofarm, Werkzeugautomatik, War-God-Fähigkeiten, Auto-Collect, Auto-Sell und Auto-Bossfight.
 
 ## Starten
 
@@ -31,6 +31,14 @@ Nach Teleports lädt das Script automatisch erneut. Diese Funktion ist fest akti
 Für wiederholtes Event-Shard-Farmen Raben, Säulenrätsel und Run-Wiederholung einschalten, die Event-Welt auswählen und den Autofarm aktivieren. Auto-Collect und Auto-Boss bleiben separat steuerbar. Die neuen Aktionen pausieren Farmbewegung und Verkauf während ihrer Interaktionen. Alle Optionen können in den nativen Sirius-Configs gespeichert werden.
 
 Für den separaten Rejoin-Modus den Gruppen-Run zuerst bis zu den gewünschten Raben freischalten und dann im Tab **Event** nur **Raben per Rejoin wiederholen** aktivieren. Während dieser Modus läuft, pausieren Farm, Bosskampf, normales Auto-Collect, Verkauf und Upgrades; ihre Schalter bleiben gespeichert. Auch die gewöhnliche Run-Wiederholung und das Säulenrätsel pausieren. Beim Ausschalten sind die vorherigen Schalter wieder wirksam. Der Rejoin-Modus und die Kennung des laufenden Runs werden bei automatischen Weltwechseln übernommen.
+
+## War-God-Fähigkeiten im Autofarm
+
+Der Autofarm liest die tatsächlich freigeschalteten Frost-Saga-Stufen. Neben dem bestehenden optimierten Axtwurf verwendet er **Frost Nova** ab Stufe 3 und **Giant's Axe** ab Stufe 4. Er vergleicht Nova-Ziele innerhalb der nativen Reichweite und HP-Grenze mit dem erwarteten Zusatznutzen mehrerer Flächenschläge während Giant's Axe. Reichweite, Zielgrenzen, Dauer, Mindestabstand zwischen Flächenschlägen und die Awakened-Werte stammen aus den Spielkonfigurationen. Bei einzelnen Bäumen werden die Fähigkeiten gespart.
+
+Nova und Giant's Axe teilen sich den serverseitigen Cooldown. Die Automatik wählt die benötigte, freigeschaltete Fähigkeit über die normale Saga-Aktion aus und stellt anschließend die vorherige Auswahl wieder her. Während Giant's Axe aktiv ist, bleibt die passende Axt ausgerüstet; weitere Würfe warten bis zum Ende des Buffs. Jeder Flächenschlag erhält einen passenden Winkel für mehrere freie Bäume. Gesperrte Gebiete, beanspruchte Bäume anderer Spieler und die bestehende Runestone-Auswahl werden auch bei den Flächenangriffen berücksichtigt. Es gibt dafür keine zusätzlichen Schalter: Die Fähigkeiten gehören zum Haupt-Autofarm.
+
+Beim Ausschalten oder Neuladen werden ausstehende Einsätze abgebrochen. Ein bereits bestätigter temporärer Fähigkeitswechsel wird noch zurückgestellt, sofern der Spieler die Auswahl nicht selbst geändert hat. Die Automatik schaltet keine Fähigkeiten frei und verändert keine Schadens- oder Cooldown-Werte.
 
 ## Automatische Run-Upgrades
 
