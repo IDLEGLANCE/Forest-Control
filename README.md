@@ -7,10 +7,10 @@ Forest Control mit Sirius Rayfield Gen2: Autofarm, Werkzeugautomatik, War-God-W�
 Führe diesen Loader in Potassium aus:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/IDLEGLANCE/Forest-Control/main/Forest-Control-Gen2.luau?v=" .. tostring(os.time())))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/IDLEGLANCE/Forest-Control/main/loader.luau?v=" .. tostring(os.time())))()
 ```
 
-Der Loader lädt die aktuelle Scriptversion aus diesem Repository und umgeht dabei veraltete HTTP-Cache-Einträge. Dasselbe gilt für den automatischen Teleport-Neustart. Er ist zusätzlich in `loader.luau` gespeichert.
+Der Loader lädt die aktuelle Scriptversion aus diesem Repository mit einer ungecachten HTTP-Anfrage, sofern der Executor sie unterstützt. Andernfalls verwendet er `HttpGet` mit wechselnder URL. Dasselbe gilt für den automatischen Teleport-Neustart. Der Teleport-Zustand wird pro Roblox-Konto gespeichert, damit gleichzeitig laufende Instanzen ihre Einstellungen nicht gegenseitig überschreiben.
 
 ## Änderungen übernehmen
 
