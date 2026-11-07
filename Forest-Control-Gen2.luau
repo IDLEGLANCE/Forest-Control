@@ -1860,6 +1860,7 @@ local function createRunAutomation()
         inLobby = false, ended = false, departing = false, returning = false, returnAt = 0, returnAttempts = 0,
         openPad = nil :: string?, launchingUntil = 0, nextLaunch = 0, catalog = nil :: any,
         ravenCycle = nil :: { [string]: any }?, nextRejoin = 0,
+        manualPending = false, manualWorker = nil :: thread?,
     }
     state.runController = controller
     local function running() return controller.alive and isAlive() end
@@ -1969,6 +1970,8 @@ local function createRunAutomation()
         end
         controller.alive = false
         controller.cancel()
+        if controller.manualWorker and controller.manualWorker ~= coroutine.running() then pcall(task.cancel, controller.manualWorker) end
+        controller.manualWorker, controller.manualPending = nil, false
         for _, connection in pairs(controller.connections) do connection:Disconnect() end
         table.clear(controller.connections)
         if controller.worker and controller.worker ~= coroutine.running() then pcall(task.cancel, controller.worker) end
@@ -2134,7 +2137,8 @@ end
         return canAct() and controller.epoch == job.epoch and controller.job == job.kind
             and player.Character == job.character and job.root:IsDescendantOf(job.character)
             and job.character:FindFirstChildOfClass("Humanoid") ~= nil
-            and job.character:FindFirstChildOfClass("Humanoid").Health > 0 and config[job.kind] == true
+            and job.character:FindFirstChildOfClass("Humanoid").Health > 0
+            and (job.kind == "ManualFrozenDuo" or config[job.kind] == true)
     end
     local function finishJob(job)
         if controller.epoch == job.epoch then controller.cancel() end
@@ -2521,17 +2525,22 @@ end
         end
         return true
     end
-    local function launchRun(data, remotes)
+    local function launchRun(data, remotes, manualDuo)
         if os.clock() < controller.nextLaunch or os.clock() < controller.launchingUntil then return end
-        if not controller.queueAvailable then
+        if not manualDuo and not controller.queueAvailable then
             report("Auto Runs requires executor support for teleport reloads"); return
         end
         if player:GetAttribute("Loaded") ~= true or not data.catalog then report("Lobby · waiting for player data"); return end
         local selected, difficulty
-        for _, entry in ipairs(data.catalog.Maps or {}) do if entry.Key == config.RunDestination then selected = entry; break end end
+        local worldKey = manualDuo and "WarGod" or config.RunDestination
+        local partySize = manualDuo and 2 or 1
+        for _, entry in ipairs(data.catalog.Maps or {}) do if entry.Key == worldKey then selected = entry; break end end
         for _, entry in ipairs(data.catalog.Difficulties or {}) do if entry.Name == config.RunDifficulty then difficulty = entry; break end end
         local wins = tonumber(player:GetAttribute("Wins")) or 0
-        if not selected or selected.Hidden == true or selected.Ends and selected.Ends <= os.time() then report("Selected world is no longer available"); return end
+        if not selected or selected.Hidden == true
+            or not manualDuo and selected.Ends and selected.Ends <= os.time() then
+            report("Selected world is no longer available"); return
+        end
         if not difficulty or wins < (selected.Wins or 0) or wins < (difficulty.Wins or 0) then report("World or difficulty is locked"); return end
         local lobby = workspace:FindFirstChild("Lobby")
         local pads = lobby and lobby:FindFirstChild("LobbyPads")
@@ -2553,9 +2562,9 @@ end
             end
         end
         if not pad then report("Lobby · waiting for a free start pad"); return end
-        local job = beginJob("AutoRepeatRun")
+        local job = beginJob(manualDuo and "ManualFrozenDuo" or "AutoRepeatRun")
         if not job then return end
-        report("Lobby · starting solo run: " .. selected.Name .. " · " .. difficulty.Name)
+        report("Lobby · starting " .. (manualDuo and "duo" or "solo") .. " run: " .. selected.Name .. " · " .. difficulty.Name)
         if controller.openPad ~= pad.Name then
             if not move(job, pad:GetPivot().Position + Vector3.new(0, 3, 0), 1) then finishJob(job); return end
             local deadline = os.clock() + 5
@@ -2570,10 +2579,11 @@ end
             return
         end
         controller.nextLaunch = os.clock() + 15
+        local peaceful = config.RunPeaceful and selected.Peaceful ~= false
         -- Ein Aufruf pro bestätigtem Pad; keine wiederholten Requests während des Starts.
         local result = { done = false, success = false, response = nil :: any }
         local rpc = task.spawn(function()
-            local success, response = pcall(create.InvokeServer, create, pad.Name, difficulty.Name, 1, selected.Key, config.RunPeaceful and selected.Peaceful ~= false)
+            local success, response = pcall(create.InvokeServer, create, pad.Name, difficulty.Name, partySize, selected.Key, peaceful)
             result.success, result.response, result.done = success, response, true
         end)
         controller.rpc = rpc
@@ -2583,18 +2593,48 @@ end
         if controller.rpc == rpc then controller.rpc = nil end
         if not jobValid(job) then finishJob(job); return end
         local success, response = result.success, result.response
-        if success and type(response) == "table" and response.Ok then
+        local accepted = success and type(response) == "table" and response.Ok == true
+        if accepted then
             controller.launchingUntil = os.clock() + 30
-            report("Solo run created · waiting for teleport")
+            report(manualDuo and "Frozen Wilds duo created · your teammate can join the pad" or "Solo run created · waiting for teleport")
         else
             report("Run start rejected · " .. tostring(type(response) == "table" and (response.Message or response.Error) or response))
             if not result.done then controller.launchingUntil = os.clock() + 30; report("Run start not confirmed · waiting for server or teleport") end
         end
         finishJob(job)
+        return accepted
+    end
+    function controller.requestFrozenDuo()
+        if not running() or state.configLoading then return false, "Run controls are not ready" end
+        if controller.manualPending or state.runBusy then return false, "A run action is already in progress" end
+        if config.AutoRepeatRun or config.AutoRavenRejoin then
+            return false, "Turn off Auto Repeat Runs and Raven Rejoin Loop first"
+        end
+        local data = rules()
+        if not data or not data.lobby then return false, "Return to the lobby to create a duo run" end
+        if os.clock() < controller.nextLaunch or os.clock() < controller.launchingUntil then
+            return false, "A recent run request is still pending"
+        end
+        controller.ended = false
+        if not canAct() then return false, "Wait for the current interaction to finish" end
+        local _, remotes = bindRemotes()
+        controller.manualPending = true
+        controller.manualWorker = task.defer(function()
+            local ok, accepted = xpcall(function() return launchRun(data, remotes, true) end,
+                function(reason) return debug.traceback(tostring(reason), 2) end)
+            if not ok then controller.cancel() end
+            controller.manualWorker, controller.manualPending = nil, false
+            if not running() then return end
+            local message = ok and controller.status or "Could not create duo run · see console"
+            if ok and not accepted and message == "" then message = "Duo run was not created" end
+            if state.window then state.window:Notify({ title = "Frozen Wilds Duo", content = message }) end
+            if not ok then warn("[ForestControl Duo] " .. tostring(accepted)) end
+        end)
+        return true
     end
     function controller.step()
         local chop, lobbyRemotes = bindRemotes()
-        if state.configLoading then return end
+        if state.configLoading or controller.manualPending then return end
         local data = rules()
         if not data then report("Waiting for world and run data"); return end
         controller.inLobby = data.lobby
@@ -2713,6 +2753,16 @@ end
             name = "Start Peaceful Runs", value = config.RunPeaceful, flag = "Setting_RunPeaceful",
             description = "Applies only to worlds that support Peaceful mode.",
             callback = function(value) commitBoolean("RunPeaceful", value) end,
+        })
+        tab:CreateButton({
+            name = "Create Frozen Wilds Duo",
+            description = "Lobby only. Creates a two-player party using Difficulty and Peaceful above. Your teammate joins the pad. Turn off automatic run modes first.",
+            callback = function()
+                local accepted, message = controller.requestFrozenDuo()
+                if not accepted and state.window then
+                    state.window:Notify({ title = "Frozen Wilds Duo", content = message })
+                end
+            end,
         })
         state.controls.AutoRepeatRun = tab:CreateToggle({
             name = "Auto Repeat Runs", value = config.AutoRepeatRun, flag = "Setting_AutoRepeatRun",
