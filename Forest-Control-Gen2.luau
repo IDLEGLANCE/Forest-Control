@@ -9,6 +9,9 @@ local HELLCHAIN_RECOVERY_FACTOR = POST_HIT_RECOVERY_FACTOR * 0.92
 local SAW_SWAP_HEAT = 0.85
 local SAW_RETURN_HEAT = 0.25
 local TREE_DISTANCE = 2
+local MAX_CHOP_DISTANCE = 25
+local LOG_PICKUP_RADIUS = 14.75
+local CURRENCY_PICKUP_RADIUS = 15.75
 local TREE_RETRY_AFTER = 5
 local LOG_RETRY_AFTER = 2
 local UNCONFIRMED_HIT_RETRIES = 2
@@ -79,37 +82,17 @@ local state = {
 }
 environment[KEY] = state
 
-local maxLogCollectRadius = 14.75
-do
-    local shared = ReplicatedStorage:FindFirstChild("Shared")
-    local configs = shared and shared:FindFirstChild("Configs")
-    local module = configs and configs:FindFirstChild("Chopping")
-    if module then
-        local loaded, settings = pcall(require, module)
-        local range = loaded and type(settings) == "table" and type(settings.Logs) == "table"
-            and tonumber(settings.Logs.ServerPickupRange)
-        if type(range) == "number" and range == range and range < math.huge and range > 0.35 then
-            maxLogCollectRadius = range - 0.25
-        end
-    end
-end
-
-local function clampLogCollectRadius(value)
-    if type(value) ~= "number" or value ~= value then return math.min(12, maxLogCollectRadius) end
-    return math.clamp(value, 0.1, maxLogCollectRadius)
-end
+local retiredSettings = {
+    MinTweenTime = true, MaxTweenTime = true, MaxChopDistance = true,
+    CollectRadius = true, CurrencyCollectRadius = true,
+}
 
 local config = {
     Speed = 38,
-    MaxChopDistance = 2.5,
-    MinTweenTime = 0.08,
-    MaxTweenTime = 30,
-    CollectRadius = 12,
     CollectInterval = 0.15,
     CollectLogs = true,
     CollectGems = true,
     CollectShards = true,
-    CurrencyCollectRadius = 16,
     FlySpeed = 60,
     WalkSpeed = 50,
     SellThreshold = 100,
@@ -134,8 +117,6 @@ if previousConfig then
         end
     end
 end
-config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
-config.CollectRadius = clampLogCollectRadius(config.CollectRadius)
 state.config = config
 
 local status
@@ -344,12 +325,7 @@ local descriptors = {
     { Key = "SellThreshold", Name = "Sell at Log Count", Description = "Sell at this many logs, or sooner if your backpack is full.", Min = 1, Integer = true, Tab = "Selling" },
     { Key = "FlySpeed", Name = "Fly Speed", Description = "Flight speed in studs per second.", Min = 1, Max = 500, Tab = "Player" },
     { Key = "WalkSpeed", Name = "Walk Speed", Description = "Movement speed while Walk Speed is enabled.", Min = 0, Max = 500, Tab = "Player" },
-    { Key = "Speed", Name = "Tween Speed", Description = "Travel speed in studs per second.", Min = 0.1, Tab = "Movement" },
-    { Key = "MinTweenTime", Name = "Minimum Tween Time", Description = "Shortest travel duration, in seconds.", Min = 0.01, Tab = "Movement" },
-    { Key = "MaxTweenTime", Name = "Maximum Tween Time", Description = "Longest travel duration, in seconds.", Min = 0.01, Tab = "Movement" },
-    { Key = "MaxChopDistance", Name = "Maximum Hit Distance", Description = "Maximum distance to a tree before attacking, in studs.", Min = 0.1, Tab = "Chopping" },
-    { Key = "CollectRadius", Name = "Log Pickup Radius", Description = string.format("First-log range, up to %.6g studs. Grasp includes nearby logs automatically.", maxLogCollectRadius), Min = 0.1, Max = maxLogCollectRadius, Tab = "Collection" },
-    { Key = "CurrencyCollectRadius", Name = "Gem & Shard Pickup Radius", Description = "Pickup range in studs, up to 16.", Min = 0.1, Max = 16, Tab = "Collection" },
+    { Key = "Speed", Name = "Tween Speed", Description = "Travel speed in studs per second.", Min = 0.1, Tab = "Farm" },
     { Key = "CollectInterval", Name = "Pickup Interval", Description = "Seconds between pickup requests. Minimum: 0.12.", Min = 0.12, Tab = "Collection" },
 }
 local descriptorByKey = {}
@@ -386,15 +362,6 @@ function state.applySetting(key, text)
     if value < descriptor.Min then return false, "Minimum: " .. format(descriptor.Min) end
     if descriptor.Max and value > descriptor.Max then return false, "Maximum: " .. format(descriptor.Max) end
     if descriptor.Integer and value % 1 ~= 0 then return false, "Enter a whole number" end
-    if key == "MinTweenTime" and value > config.MaxTweenTime then
-        return false, "Minimum time cannot exceed maximum time"
-    end
-    if key == "MaxTweenTime" and value < config.MinTweenTime then
-        return false, "Maximum time cannot be below minimum time"
-    end
-    if key == "MaxChopDistance" and value < TREE_DISTANCE then
-        return false, "Hit distance must cover the tree approach distance"
-    end
     config[key] = value
     syncField(key)
     if descriptor.Tab ~= "Player" and descriptor.Tab ~= "Selling" then settingsChanged() end
@@ -2669,8 +2636,6 @@ end
         for key, value in pairs(payload.settings or {}) do
             if type(value) == type(config[key]) and (type(value) ~= "string" or controller.validateSetting(key, value)) then config[key] = value end
         end
-        config.MaxChopDistance = math.max(TREE_DISTANCE, config.MaxChopDistance)
-        config.CollectRadius = clampLogCollectRadius(config.CollectRadius)
         if config.AutoRavenRejoin then
             controller.ravenCycle = validateRavenCycle(payload.ravenCycle) or controller.ravenCycle
         else
@@ -2915,6 +2880,7 @@ local function createConfigManager(window)
     local function validateSettings(values)
         local candidate = table.clone(config)
         for key, raw in pairs(values) do
+            if retiredSettings[key] then continue end
             if type(candidate[key]) == "boolean" then
                 assert(type(raw) == "boolean", "Invalid toggle: " .. key)
                 candidate[key] = raw
@@ -2926,14 +2892,11 @@ local function createConfigManager(window)
                 assert(descriptor, "Unknown setting: " .. tostring(key))
                 local value = tonumber((tostring(raw):gsub(",", ".")))
                 assert(value and value == value and math.abs(value) < math.huge, "Invalid number: " .. key)
-                if key == "CollectRadius" then value = clampLogCollectRadius(value) end
                 assert(value >= descriptor.Min and (not descriptor.Max or value <= descriptor.Max), "Value out of range: " .. key)
                 assert(not descriptor.Integer or value % 1 == 0, "Whole number required: " .. key)
                 candidate[key] = value
             end
         end
-        assert(candidate.MinTweenTime <= candidate.MaxTweenTime, "Minimum tween time exceeds maximum")
-        candidate.MaxChopDistance = math.max(TREE_DISTANCE, candidate.MaxChopDistance)
         return candidate
     end
     function manager.save(name)
@@ -3094,14 +3057,12 @@ local ok, err = pcall(function()
     local upgradeController = createUpgradeAutomation()
 
     local farm = window:CreateTab({ name = "Farm" })
-    local movement = window:CreateTab({ name = "Movement" })
-    local chopping = window:CreateTab({ name = "Chopping" })
     local collection = window:CreateTab({ name = "Collection" })
     local selling = window:CreateTab({ name = "Selling" })
     runController.createTab(window)
     upgradeController.createTab(window)
     createPlayerTab(window)
-    local tabs = { Movement = movement, Chopping = chopping, Collection = collection, Selling = selling }
+    local tabs = { Collection = collection, Selling = selling }
 
     state.controls.AutoSell = selling:CreateToggle({
         name = "Auto Sell", value = false, flag = "SellEnabled",
@@ -3161,6 +3122,12 @@ local ok, err = pcall(function()
         description = "Fights Guardians with your best owned weapon, stays behind them, and dodges frontal attacks. Runs independently of Auto Farm.",
         callback = function(value) commitBoolean("AutoBoss", value) end,
     })
+    state.controls.Speed = farm:CreateInput({
+        name = descriptorByKey.Speed.Name, description = descriptorByKey.Speed.Description,
+        numeric = true, value = format(config.Speed), flag = "Setting_Speed",
+        placeholder = "Enter a number",
+        callback = function(value) commit("Speed", value) end,
+    })
     status = farm:CreateText({ name = "Status", text = "Paused · ready to start" })
     farm:CreateButton({
         name = "Terminate",
@@ -3192,10 +3159,8 @@ local ok, err = pcall(function()
         })
     end
 
-    state.controls.CombatStats = chopping:CreateText({ name = "Live Tool Stats", text = "Reading tool data…" })
-
     for _, descriptor in ipairs(descriptors) do
-        if descriptor.Tab == "Player" or descriptor.Tab == "Selling" then continue end
+        if descriptor.Tab ~= "Collection" then continue end
         local key = descriptor.Key
         state.controls[key] = tabs[descriptor.Tab]:CreateInput({
             name = descriptor.Name,
@@ -3255,7 +3220,6 @@ local combat = {
     sawSwapRetryAt = 0,
     sawSwapRejected = {} :: { [string]: number },
     lastAttempt = nil :: { [string]: any }?,
-    lastDisplay = nil,
 }
 state.combat = combat
 
@@ -4032,67 +3996,6 @@ local function updateSawToolChoice(tree)
 end
 combat.updateSawToolChoice = updateSawToolChoice
 
-local function refreshCombatDisplay()
-    local handle = state.controls.CombatStats
-    if not handle or not isAlive() then return end
-    local profile = combat.profile()
-    local text
-    if profile and profile.tool == "Axe" then
-        text = string.format("Axe · Damage %.3f (Base %.3f · Frost ×%.2f)\nSharpness %d · Speed %d · Hold %s\nSwing interval %.3f s · Hit delay %.3f s · Range %.1f\nConfirmed-hit recovery −8 %%\nLast confirmed damage %.3f · Remaining HP %.3f",
-            profile.damage, profile.rawDamage, profile.frostDamage, profile.sharpLevel, profile.speedLevel,
-            profile.hold and "owned" or "not owned", profile.cycle, profile.windup, profile.reach,
-            combat.axeStats.lastDamage, combat.axeStats.lastHP)
-    elseif profile and profile.tool == "Fists" then
-        text = string.format("Fists · Damage %.3f · Range %.1f\nSwing interval %.3f s · Hit delay %.3f s\nLast confirmed damage %.3f · Remaining HP %.3f",
-            profile.damage, profile.reach, profile.cycle, profile.windup,
-            combat.fistsStats.lastDamage, combat.fistsStats.lastHP)
-    elseif profile and profile.tool == "Chainsaw" then
-        text = string.format("Chainsaw · Damage per cut %.3f · Range %.1f\nCut interval %.3f s · Startup %.3f s\nSpeed %d · Cooling %d · Recovery %d\nHeat %.0f %% · %s\nLast confirmed damage %.3f · Remaining HP %.3f",
-            profile.damage, profile.reach, profile.cycle, profile.engage,
-            profile.speedLevel, profile.coolingLevel, profile.recoveryLevel, profile.heat * 100,
-            profile.locked and string.format("Cooling · %.1f s", profile.coolRemaining) or "ready",
-            combat.sawStats.lastDamage, combat.sawStats.lastHP)
-    elseif profile and profile.tool ~= "HellChain" then
-        local stats = combat.toolStats[profile.tool]
-        text = string.format("%s · %s\nDamage %.3f · Range %.1f · Class %s\n%s\nLast confirmed damage %.3f",
-            profile.label, profile.family, profile.damage, profile.reach, profile.class or "Default",
-            profile.direct and "Direct hits without local swing animation" or "Native tool controls", stats and stats.lastDamage or 0)
-    elseif profile then
-        text = string.format("Chain Power %d · Damage %.3f · Swing %.3f s · Hit delay %.3f s\nTiming reduction %.1f %% · Arrival pause %.3f s\nConfirmed-hit recovery −%.2f %%\nHit range %.1f · Lash %.1f (Ability)\nBurn %.1f s / Tick %.2f s · Remaining damage from recorded HP ticks",
-            profile.level, profile.damage, profile.cycle, profile.windup,
-            (1 - profile.timingFactor) * 100, profile.settle,
-            (1 - HELLCHAIN_RECOVERY_FACTOR) * 100,
-            profile.reach, profile.lashRange, profile.fireDuration, profile.fireTick)
-    elseif player:GetAttribute("Tool") == "Axe" or player:GetAttribute("Tool") == "Fists"
-        or player:GetAttribute("Tool") == "Chainsaw" then
-        text = "Waiting for tool and animation data…"
-    elseif player:GetAttribute("Tool") == "HellChain" then
-        text = "Waiting for HellChain and animation data…"
-    else
-        text = "Tool automation inactive · using manual settings"
-    end
-    if combat.sawSwap then
-        local heat = sawHeatState()
-        if heat then text = text .. string.format("\nChainsaw cooling · %.0f %% · Swap back at %.0f %%", heat.heat * 100, SAW_RETURN_HEAT * 100) end
-    end
-    if state.abilityController and ownsFarmTool("Leviathan") then
-        local ability = state.abilityController
-        local left = ability.cooldownLeft()
-        text = text .. string.format("\nWar-God Throw · %s · Last confirmed targets %d",
-            ability.frost.request and "switching ability" or ability.isFlying() and "axe in flight"
-                or left > 0 and string.format("%.1f s cooldown", left) or "ready",
-            ability.lastFlight and ability.lastFlight.count or 0)
-    end
-    if state.abilityController then
-        local frostStatus = state.abilityController.frostStatus()
-        if frostStatus then text = text .. "\n" .. frostStatus end
-    end
-    if text ~= combat.lastDisplay then
-        handle:Set(text)
-        combat.lastDisplay = text
-    end
-end
-
 -- Messwerte nur zwischen identischen Baum-/Schadensprofilen wiederverwenden.
 -- Smoulder.Share wird nicht als unbekannte Serverformel interpretiert.
 local function fireModelKey(tree, profile)
@@ -4595,7 +4498,7 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
         local angle = recovery.angle + (recovery.failures % 4) * math.pi / 2
         direction = Vector3.new(math.cos(angle), 0, math.sin(angle))
     end
-    local maxDistance = profile and math.min(config.MaxChopDistance, profile.reach - 0.25) or config.MaxChopDistance
+    local maxDistance = profile and math.min(MAX_CHOP_DISTANCE, profile.reach - 0.25) or MAX_CHOP_DISTANCE
     if profile and profile.minimumDistance then maxDistance = profile.reach - 0.25 end
     local clearance = TREE_DISTANCE + (recovery and math.min(1, recovery.failures * 0.35) or 0)
     if profile and profile.minimumDistance then clearance = math.max(clearance, profile.minimumDistance) end
@@ -4615,11 +4518,7 @@ local function approachTree(tree, character, root, humanoid, revision, profile)
         destination = best
     end
     local lookAt = Vector3.new(position.X, destination.Y, position.Z)
-    local duration = math.clamp(
-        (root.Position - destination).Magnitude / config.Speed,
-        config.MinTweenTime,
-        config.MaxTweenTime
-    )
+    local duration = (root.Position - destination).Magnitude / config.Speed
     local tween = TweenService:Create(
         root,
         TweenInfo.new(duration, Enum.EasingStyle.Linear),
@@ -4727,7 +4626,7 @@ local function automaticTree(tree, character, root, humanoid, revision, initialP
         profile = combatProfile(tree)
         if not profile then return end
         position = treePosition(tree)
-        local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
+        local range = math.min(MAX_CHOP_DISTANCE, profile.reach - 0.25)
         if not position or (root.Position - position).Magnitude > range then
             retryTree(tree, recovery, "Moved before the hit")
             return
@@ -4914,7 +4813,7 @@ local function automaticAxeTree(tree, character, root, humanoid, revision, initi
         if not valid() then return end
         local native = combat.axe
         if profile.silent then native.swing.Side = profile.side end
-        local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
+        local range = math.min(MAX_CHOP_DISTANCE, profile.reach - 0.25)
         position = treePosition(tree)
         if not position or (root.Position - position).Magnitude > range then
             retryTree(tree, recovery, label .. " · position out of range")
@@ -5118,7 +5017,7 @@ local function automaticSawTree(tree, character, root, humanoid, revision, initi
                 end
             end
             position = treePosition(tree)
-            local range = math.min(config.MaxChopDistance, profile.reach - 0.25)
+            local range = math.min(MAX_CHOP_DISTANCE, profile.reach - 0.25)
             if not position or (root.Position - position).Magnitude > range then
                 retryTree(tree, recovery, "Chainsaw position out of range")
                 return
@@ -5255,7 +5154,7 @@ return end
         local at = treePosition(tree)
         if not at then return nil end
         local maxDistance = profile.minimumDistance and profile.reach - 0.25
-            or math.min(config.MaxChopDistance, profile.reach - 0.25)
+            or math.min(MAX_CHOP_DISTANCE, profile.reach - 0.25)
         if (root.Position - at).Magnitude > maxDistance then return nil end
         local head = character:FindFirstChild("Head")
         local eye = head and head.Position or root.Position + Vector3.new(0, 1.5, 0)
@@ -5834,17 +5733,6 @@ local function createAbilityController()
     function controller.furyActive()
         return (tonumber(player:GetAttribute("FuryUntil")) or 0) > workspace:GetServerTimeNow()
     end
-    function controller.frostStatus()
-        local data = resolveFrost()
-        if not data or not unlocked(data.api, "Nova") then return nil end
-        local now = workspace:GetServerTimeNow()
-        if controller.furyActive() then
-            return string.format("Giant's Axe active · %.1f s", player:GetAttribute("FuryUntil") - now)
-        end
-        local names = unlocked(data.api, "Fury") and "Nova / Giant's Axe" or "Frost Nova"
-        local left = math.max(0, (tonumber(player:GetAttribute("FrostReadyAt")) or 0) - now)
-        return names .. (left > 0 and string.format(" · %.1f s shared cooldown", left) or " · group targeting ready")
-    end
     local function frostTool()
         if ownsFarmTool("Leviathan") then return "Leviathan" end
         if ownsFarmTool("Axe") then return "Axe" end
@@ -6333,7 +6221,6 @@ local abilityController = createAbilityController()
 
 local function farmStep()
     local revision = state.revision
-    refreshCombatDisplay()
     if not resolveWorld() then
         setStatus("Waiting for world and chopping controls…")
         task.wait(0.25)
@@ -6764,7 +6651,7 @@ local function collectLogsStep(character, root, humanoid, shared, remotes)
     grab = math.max(1, math.floor(grab))
     local limit = math.floor(math.min(grab, capacity - carried))
     local serverRange = math.max(0, (tonumber(logSettings.ServerPickupRange) or 15) - 0.25)
-    local firstRange = math.min(config.CollectRadius, serverRange)
+    local firstRange = math.min(LOG_PICKUP_RADIUS, serverRange)
     local graspRange = math.max(0, tonumber(logSettings.GraspRadius) or 8)
     local now = os.clock()
     local candidates = {}
@@ -6867,7 +6754,7 @@ local function collectCurrencyStep(character, root, humanoid, shared, remotes)
         end
     end
     if not collectionAllowed() or player.Character ~= character then return nil end
-    local range = math.min(config.CurrencyCollectRadius, 15.75)
+    local range = CURRENCY_PICKUP_RADIUS
     local now = os.clock()
     local candidates = {}
     for _, drop in ipairs(folder:GetDescendants()) do
@@ -7004,20 +6891,11 @@ state.bossWorker = task.spawn(function()
 end)
 
 state.worker = task.spawn(function()
-    local nextDisplay = 0
     while isAlive() do
         if not isRunning() then
             if state.enabled and isGuardianFightActive() and not state.bossBusy
                 and not state.sellBusy and not state.configLoading then
                 setStatus("Boss fight · tree farming paused · manual weapon selection")
-            end
-            if os.clock() >= nextDisplay then
-                nextDisplay = os.clock() + 1
-                local displayed, displayError = pcall(refreshCombatDisplay)
-                if not displayed then
-                    warn("[ForestControl HellChain] " .. tostring(displayError))
-                    nextDisplay = os.clock() + 10
-                end
             end
             task.wait(0.1)
         else
