@@ -50,6 +50,10 @@ Beide Schalter werden in Configs gespeichert und bei Teleports übernommen. Die 
 
 ## Feste Automatikwerte
 
+Die Tabs **Movement** und **Chopping** wurden entfernt. **Tween Speed** steht im Tab **Farm** direkt unter **Auto Boss Fight**. Die Farm-Bewegung berechnet ihre Dauer ausschließlich als Entfernung geteilt durch Tween Speed; minimale und maximale Tween-Zeiten entfallen.
+
+Die allgemeine Schlagdistanzgrenze ist fest auf 25 Studs gesetzt. Die tatsächliche Werkzeugreichweite begrenzt jeden Angriff weiterhin zusätzlich. Der Holz-Sammelradius beträgt 14,75 Studs und bleibt auf die native Serverreichweite begrenzt. Gems und Shards verwenden fest 15,75 Studs (mit Puffer zur bisherigen 16-Stud-Grenze). Diese Felder werden nicht mehr angezeigt und alte Config-Werte dafür ignoriert. **Pickup Interval** bleibt sichtbar und unverändert einstellbar.
+
 Der Basisabstand zum Baum beträgt 2 Studs. Fehlgeschlagene Baumversuche werden nach 5 Sekunden erneut freigegeben; fehlgeschlagene Holz-Sammelversuche nach 2 Sekunden. Diese Werte und der automatische Teleport-Neustart sind fest in der jeweiligen Automatik eingebaut und werden durch alte Config-Einträge nicht verändert. Die Schlagzeiten richten sich nach dem Werkzeug; einen zusätzlichen manuellen Mindestabstand gibt es nicht mehr. Run-, Sammel- und Schusshilfen-Statusanzeigen wurden aus der Oberfläche entfernt.
 
 Bei Axt und Kettensäge führt ein einzelner unbestätigter Treffer nicht sofort zum nächsten Baum: Nach dem nativen Werkzeugtakt sind bis zu zwei weitere Versuche am selben Baum erlaubt. Bestätigte Treffer behalten das schnelle 0,13-Sekunden-Bestätigungsfenster. Erst nach drei aufeinanderfolgenden unbestätigten Treffern greift der normale spätere Baum-Anlauf. Ausschalten, Gebietsgrenzen, Mitspieler und Sägehitze werden weiterhin berücksichtigt.
