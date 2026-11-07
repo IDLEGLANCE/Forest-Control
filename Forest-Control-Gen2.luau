@@ -2394,7 +2394,9 @@ end
         if type(info) ~= "table" or type(info.Members) ~= "table" then return nil, "No active run available to rejoin" end
         local eventWorld
         for _, entry in ipairs(catalog and catalog.Maps or {}) do
-            if entry.Key == "WarGod" and entry.Hidden ~= true and (not entry.Ends or entry.Ends > os.time()) then
+            -- A confirmed existing run can remain joinable after its lobby listing expires.
+            -- Rejoin:Get, matching teammates and Rejoin:Go decide whether it is available.
+            if entry.Key == "WarGod" then
                 eventWorld = entry
                 break
             end
